@@ -1,0 +1,265 @@
+import sys
+sys.path.insert(0, ".")
+
+from app.core.database import SessionLocal, Base, engine
+from app.domain.models import Scheme, SchemeVersion
+
+SCHEMES_DATA = [
+    {
+        "code": "MOTA-001",
+        "name": "Dharti Aaba Janjatiya Gram Utkarsh Abhiyan (DAJGUA)",
+        "status": "Active",
+        "category": "Umbrella Development Missions",
+        "description": "A massive flagship saturation program covering over 63,000 tribal-majority villages to bridge critical social infrastructure, health, and livelihood gaps."
+    },
+    {
+        "code": "MOTA-002",
+        "name": "PM Janjati Adivasi Nyaya Maha Abhiyan (PM-JANMAN)",
+        "status": "Active",
+        "category": "Umbrella Development Missions",
+        "description": "A cross-ministry micro-mission executing 11 absolute basic infrastructure interventions (housing, solar power, telecom) across remote PVTG habitations."
+    },
+    {
+        "code": "MOTA-003",
+        "name": "Pradhan Mantri Vanbandhu Kalyan Yojana (PMVKY)",
+        "status": "Active",
+        "category": "Umbrella Development Missions",
+        "description": "The overarching core framework that orchestrates convergence, resource allocation, and specialized programmatic outputs across all state tribal departments."
+    },
+    {
+        "code": "MOTA-004",
+        "name": "Pradhan Mantri Janjatiya Vikas Mission (PMJVM)",
+        "status": "Active",
+        "category": "Livelihood & Economic Support",
+        "description": "An integrated mission dedicated to scaling up the market value chain, enterprise incubation, and minimum support price infrastructure for tribal produce."
+    },
+    {
+        "code": "MOTA-005",
+        "name": "Pradhan Mantri Adi Adarsh Gram Yojana (PMAAGY)",
+        "status": "Active",
+        "category": "Umbrella Development Missions",
+        "description": "Focuses on developing model tribal villages by filling critical needs in sanitation, education, and water. Currently migrating operational targets into the DAJGUA framework."
+    },
+    {
+        "code": "MOTA-006",
+        "name": "Pre-Matric Scholarship for ST Students",
+        "status": "Active",
+        "category": "Educational & Fellowship Schemes",
+        "description": "Financial stipends awarded to under-privileged tribal students enrolled in Classes 9 and 10 to restrict high drop-out rates."
+    },
+    {
+        "code": "MOTA-007",
+        "name": "Post-Matric Scholarship for ST Students",
+        "status": "Active",
+        "category": "Educational & Fellowship Schemes",
+        "description": "100% centrally assisted direct funding given to eligible ST students pursuing higher education from Class 11 up to postgraduate levels."
+    },
+    {
+        "code": "MOTA-008",
+        "name": "National Fellowship for Higher Education of ST Students",
+        "status": "Active",
+        "category": "Educational & Fellowship Schemes",
+        "description": "Provides financial fellowship support directly to meritorious ST scholars working toward university M.Phil and Ph.D. research programs."
+    },
+    {
+        "code": "MOTA-009",
+        "name": "National Overseas Scholarship (NOS) for ST Candidates",
+        "status": "Active",
+        "category": "Educational & Fellowship Schemes",
+        "description": "Covers tuition fees, travel, and living stipends for brilliant tribal students selected to pursue master's and doctoral degrees abroad."
+    },
+    {
+        "code": "MOTA-010",
+        "name": "Eklavya Model Residential Schools (EMRS)",
+        "status": "Active",
+        "category": "Educational & Fellowship Schemes",
+        "description": "A growing, fully funded network of middle and high-school residential campuses aimed at providing modern education to tribal children in rural areas."
+    },
+    {
+        "code": "MOTA-011",
+        "name": "Development of Particularly Vulnerable Tribal Groups (PVTGs)",
+        "status": "Active",
+        "category": "Umbrella Development Missions",
+        "description": "A targeted funding line designated under PMVKY for protective socio-economic mapping and livelihood survival models across the 75 identified PVTGs."
+    },
+    {
+        "code": "MOTA-012",
+        "name": "Support to Tribal Research Institutes (TRIs)",
+        "status": "Active",
+        "category": "Research & Digital Initiatives",
+        "description": "Administrative and developmental funding given to state-level TRIs to document indigenous languages, cultural history, and conduct diagnostic policy audits."
+    },
+    {
+        "code": "MOTA-013",
+        "name": "Centers of Excellence (CoEs) Funding Scheme",
+        "status": "Active",
+        "category": "Research & Digital Initiatives",
+        "description": "Grants to elite institutes and universities to conduct research on specific tribal medicine, bio-resource utilization, and anthropological mapping."
+    },
+    {
+        "code": "MOTA-014",
+        "name": "Vocational Training in Tribal Areas",
+        "status": "Active",
+        "category": "Livelihood & Economic Support",
+        "description": "Sub-scheme setting up dedicated vocational training clusters inside tribal districts to promote market-linked technical skill sets."
+    },
+    {
+        "code": "MOTA-015",
+        "name": "Van Dhan Vikas Kendras (VDVKs)",
+        "status": "Active",
+        "category": "Livelihood & Economic Support",
+        "description": "Livelihood clusters helping tribal Self Help Groups process, pack, and branding locally sourced Minor Forest Produce (MFP)."
+    },
+    {
+        "code": "MOTA-016",
+        "name": "Institutional Support for Development and Marketing of Tribal Products",
+        "status": "Active",
+        "category": "Livelihood & Economic Support",
+        "description": "Strategic budgetary framework implemented via TRIFED to run modern retail networks, exhibitions, and international expos for tribal art."
+    },
+    {
+        "code": "MOTA-017",
+        "name": "NSTFDC Term Loan Scheme",
+        "status": "Active",
+        "category": "Concessional Finance (NSTFDC)",
+        "description": "Low-interest credit lines up to fixed limits extended to individual tribal micro-entrepreneurs setting up small trade operations."
+    },
+    {
+        "code": "MOTA-018",
+        "name": "Adivasi Mahila Sashaktikaran Yojana (AMSY)",
+        "status": "Active",
+        "category": "Concessional Finance (NSTFDC)",
+        "description": "Highly subsidized term financing mapped explicitly to support income-generating activities run by Scheduled Tribe women."
+    },
+    {
+        "code": "MOTA-019",
+        "name": "Micro Credit Scheme for Self Help Groups",
+        "status": "Active",
+        "category": "Concessional Finance (NSTFDC)",
+        "description": "Provides immediate, small working capital loans to tribal self-help configurations via state channelizing agencies."
+    },
+    {
+        "code": "MOTA-020",
+        "name": "Adivasi Shiksha Rinn Yojana",
+        "status": "Active",
+        "category": "Concessional Finance (NSTFDC)",
+        "description": "A highly subsidized educational loan product tailored to finance professional, technical, and graduate coursework in India."
+    },
+    {
+        "code": "MOTA-021",
+        "name": "Tribal Forest Dwellers Empowerment Scheme",
+        "status": "Active",
+        "category": "Concessional Finance (NSTFDC)",
+        "description": "Low-interest capital advances provided to forest dwellers to help cultivate lands granted under the Forest Rights Act (FRA)."
+    },
+    {
+        "code": "MOTA-022",
+        "name": "Teak Growers Scheme / Agro-Forestry Credit",
+        "status": "Active",
+        "category": "Concessional Finance (NSTFDC)",
+        "description": "Specialized long-term concessional financing windows provided to encourage block commercial tree farming and homestead agro-forestry."
+    },
+    {
+        "code": "MOTA-023",
+        "name": "Going Online as Leaders (GOAL) Program",
+        "status": "Active",
+        "category": "Research & Digital Initiatives",
+        "description": "A digitally integrated mentorship drive aimed at scaling tech literacy, entrepreneurship, and digital skills among tribal youth."
+    },
+    {
+        "code": "MOTA-024",
+        "name": "Swasthya: Tribal Health and Nutrition Portal",
+        "status": "Active",
+        "category": "Research & Digital Initiatives",
+        "description": "A unique dashboard and repository documenting tribal medical dashboards, nutritional data, and localized epidemiological insights."
+    },
+    {
+        "code": "MOTA-025",
+        "name": "Adi Prashikshan Portal",
+        "status": "Active",
+        "category": "Research & Digital Initiatives",
+        "description": "A central training platform intended to act as an educational warehouse for training institutional stakeholders, PRI members, and master trainers."
+    },
+    {
+        "code": "MOTA-026",
+        "name": "Special Central Assistance to Tribal Sub-Scheme (SCA to TSS)",
+        "status": "Subsumed / Closed",
+        "category": "Historical & Subsumed Frameworks",
+        "description": "The original core funds released annually as an additive to state tribal sub-plans. Restructured and formally converted into PMAAGY."
+    },
+    {
+        "code": "MOTA-027",
+        "name": "Grants under First Proviso to Article 275(1) of the Constitution",
+        "status": "Subsumed / Closed",
+        "category": "Historical & Subsumed Frameworks",
+        "description": "Historical constitutional grants issued to state administrations for funding capital projects. Infrastructure allocations are now integrated into PMVKY."
+    },
+    {
+        "code": "MOTA-028",
+        "name": "Top Class Education for ST Students",
+        "status": "Active",
+        "category": "Educational & Fellowship Schemes",
+        "description": "A distinct scholarship pool tracking professional degrees in premier institutes. Fully merged into the modern National Fellowship & Scholarship umbrella."
+    }
+]
+
+def seed_all():
+    db = SessionLocal()
+    count = 0
+    for s_data in SCHEMES_DATA:
+        scheme = db.query(Scheme).filter_by(code=s_data["code"]).first()
+        if not scheme:
+            scheme = Scheme(
+                code=s_data["code"],
+                name=s_data["name"],
+                description=s_data["description"],
+                active=(s_data["status"] != "Subsumed / Closed")
+            )
+            db.add(scheme)
+            db.flush()
+            version = SchemeVersion(
+                scheme_id=scheme.id,
+                version="v1.0",
+                status="PUBLISHED",
+                configuration={
+                    "category": s_data["category"],
+                    "status": s_data["status"],
+                    "description": s_data["description"],
+                    "form_definition": {
+                        "sections": [
+                            {
+                                "id": "sec_academic",
+                                "title": "Academic & Eligibility Details",
+                                "fields": [
+                                    {"id": "course_name", "label": "Course / Degree Name", "type": "text", "required": True},
+                                    {"id": "institution_name", "label": "College / University Name", "type": "text", "required": True},
+                                    {"id": "admission_year", "label": "Admission Year", "type": "number", "required": True},
+                                    {"id": "annual_income", "label": "Annual Family Income (₹)", "type": "number", "required": True}
+                                ]
+                            }
+                        ]
+                    }
+                }
+            )
+            db.add(version)
+            count += 1
+        else:
+            # ensure it has a published version
+            v = db.query(SchemeVersion).filter_by(scheme_id=scheme.id).first()
+            if not v:
+                v = SchemeVersion(
+                    scheme_id=scheme.id,
+                    version="v1.0",
+                    status="PUBLISHED",
+                    configuration={
+                        "category": s_data["category"],
+                        "status": s_data["status"],
+                        "description": s_data["description"]
+                    }
+                )
+                db.add(v)
+    db.commit()
+    print(f"Successfully seeded {count} new schemes (Total {len(SCHEMES_DATA)} schemes available in database).")
+
+if __name__ == "__main__":
+    seed_all()
