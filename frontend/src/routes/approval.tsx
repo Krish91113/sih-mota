@@ -2,6 +2,7 @@ import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { PortalLayout } from "@/components/mota/PortalLayout";
 import { approvalNav } from "@/lib/portal-nav";
 import { usePortalUser } from "@/hooks/usePortalUser";
+import { useApprovalsQueueQuery } from "@/hooks/api/useQueues";
 
 export const Route = createFileRoute("/approval")({
   head: () => ({
@@ -12,6 +13,7 @@ export const Route = createFileRoute("/approval")({
 
 function ApprovalLayout() {
   const { portalUser, isLoading } = usePortalUser("/approval");
+  const { data: queue } = useApprovalsQueueQuery();
   if (isLoading || !portalUser)
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -19,7 +21,12 @@ function ApprovalLayout() {
       </div>
     );
   return (
-    <PortalLayout user={portalUser} nav={approvalNav} portalName="Approval Portal">
+    <PortalLayout
+      user={portalUser}
+      nav={approvalNav}
+      portalName="Approval Portal"
+      badgeCounts={{ "/approval/queue": queue?.length ?? 0 }}
+    >
       <Outlet />
     </PortalLayout>
   );

@@ -1,9 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { PublicLayout } from "@/components/mota/PublicLayout";
 import { PageBanner } from "@/components/mota/PageBanner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Download, FileText } from "lucide-react";
+import { FileText } from "lucide-react";
 
 export const Route = createFileRoute("/guidelines")({
   head: () => ({
@@ -117,19 +117,18 @@ function Guidelines() {
           </nav>
           <div className="rounded-xl border bg-card p-5 shadow-card">
             <p className="flex items-center gap-2 text-sm font-semibold">
-              <FileText className="size-4 text-primary" aria-hidden /> Downloads
+              <FileText className="size-4 text-primary" aria-hidden /> Scheme checklist
             </p>
-            <div className="mt-3 space-y-2">
-              {[
-                "Consolidated guidelines (PDF)",
-                "Document checklist (PDF)",
-                "Institution verification handbook",
-              ].map((d) => (
-                <Button key={d} variant="outline" size="sm" className="w-full justify-start">
-                  <Download className="size-4" aria-hidden /> {d}
-                </Button>
-              ))}
-            </div>
+            <p className="mt-3 text-sm text-muted-foreground">
+              The exact document checklist and eligibility conditions are published on each scheme
+              page. Open a scheme to see its requirements before applying.
+            </p>
+            <Button asChild variant="outline" size="sm" className="mt-3 w-full justify-start">
+              <Link to="/schemes">Browse schemes</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm" className="mt-2 w-full justify-start">
+              <Link to="/contact">Contact the helpdesk</Link>
+            </Button>
           </div>
         </aside>
       </div>

@@ -8,7 +8,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
-import { faqs } from "@/lib/mock";
+import { faqs } from "@/content/publicContent";
 
 export const Route = createFileRoute("/faqs")({
   head: () => ({

@@ -1,9 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { PageHeader, KpiCard, StatusBadge } from "@/components/mota/bits";
-import { useApplicationsQuery } from "@/hooks/api/useApplications";
-import { useDocumentsQuery } from "@/hooks/api/useDocuments";
+import { PageHeader, KpiCard, Priority, StatusBadge } from "@/components/mota/bits";
+import { useOfficerQueueQuery } from "@/hooks/api/useQueues";
+import { listDeficiencies } from "@/api/deficiencies";
 import { useGrievancesQuery } from "@/hooks/api/useGrievances";
 import { useNotificationsQuery } from "@/hooks/api/useNotifications";
 import {
@@ -12,7 +13,6 @@ import {
   ClipboardList,
   Clock,
   LifeBuoy,
-  ShieldCheck,
   TrendingUp,
 } from "lucide-react";
 
@@ -23,24 +23,31 @@ export const Route = createFileRoute("/officer/")({
   component: OfficerDashboard,
 });
 
+const SLA_TARGET_DAYS = 14;
+
 function OfficerDashboard() {
   const navigate = useNavigate();
-  const {
-    data: officerQueue2 = [],
-    isLoading: queueLoading,
-    isError: queueError,
-  } = useApplicationsQuery();
-  const { data: officerDeficiencies = [] } = useDocumentsQuery();
-  const { data: officerGrievances = [] } = useGrievancesQuery();
+  const { data: queue = [], isLoading, isError } = useOfficerQueueQuery();
+  const { data: deficiencies = [] } = useQuery({
+    queryKey: ["deficiencies", "officer"],
+    queryFn: () => listDeficiencies(),
+  });
+  const { data: grievances = [] } = useGrievancesQuery();
   const { data: notifications = [] } = useNotificationsQuery();
-  if (queueLoading)
-    return <p className="py-8 text-sm text-muted-foreground">Loading officer dashboard…</p>;
-  if (queueError)
-    return <p className="py-8 text-sm text-destructive">We could not load the officer queue.</p>;
-  const totalSla = 3 * 5;
 
-  const initials = (name: string) =>
-    name
+  if (isLoading)
+    return <p className="py-8 text-sm text-muted-foreground">Loading officer dashboard…</p>;
+  if (isError)
+    return <p className="py-8 text-sm text-destructive">We could not load the officer queue.</p>;
+
+  const openDeficiencies = deficiencies.filter((d) => d.status !== "RESOLVED").length;
+  const overSla = queue.filter((q) => (q.sla_days ?? 0) >= SLA_TARGET_DAYS).length;
+  const withinSla = queue.length - overSla;
+  const openGrievances = grievances.filter((g) => g.status !== "Resolved" && g.status !== "CLOSED");
+  const slaPct = queue.length > 0 ? Math.round((withinSla / queue.length) * 100) : 0;
+
+  const initials = (name: string | null) =>
+    (name ?? "—")
       .split(" ")
       .map((w) => w[0])
       .slice(0, 2)
@@ -48,21 +55,13 @@ function OfficerDashboard() {
 
   return (
     <div>
-      <PageHeader
-        title="Officer dashboard"
-        desc="Scrutiny queue for the 2026-27 application cycle."
-      />
+      <PageHeader title="Officer dashboard" desc="Your assigned scrutiny and verification work." />
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <KpiCard label="In my queue" value="41" icon={ClipboardList} />
-        <KpiCard
-          label="Action required"
-          value={String(officerDeficiencies.filter((d) => d.status === "Pending").length + 1)}
-          icon={AlertTriangle}
-        />
-        <KpiCard label="Over SLA" value="7" icon={Clock} />
-        <KpiCard label="Escalations received" value="3" icon={ShieldCheck} />
-        <KpiCard label="Closed today" value="18" icon={TrendingUp} />
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard label="In my queue" value={String(queue.length)} icon={ClipboardList} />
+        <KpiCard label="Action required" value={String(openDeficiencies)} icon={AlertTriangle} />
+        <KpiCard label="Over SLA" value={String(overSla)} icon={Clock} />
+        <KpiCard label="Open grievances" value={String(openGrievances.length)} icon={LifeBuoy} />
       </div>
 
       <div className="mb-6 grid gap-6 lg:grid-cols-3">
@@ -76,10 +75,13 @@ function OfficerDashboard() {
             </Button>
           </CardHeader>
           <CardContent className="p-3">
-            <ul>
-              {officerQueue2.map((q, i) => {
-                const score = q.score;
-                return (
+            {queue.length === 0 ? (
+              <p className="p-4 text-sm text-muted-foreground">
+                No applications are assigned to you right now.
+              </p>
+            ) : (
+              <ul>
+                {queue.slice(0, 6).map((q, i) => (
                   <li key={q.id}>
                     <button
                       type="button"
@@ -93,38 +95,33 @@ function OfficerDashboard() {
                           {initials(q.applicant)}
                         </span>
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">{q.applicant}</p>
+                          <p className="truncate text-sm font-medium">
+                            {q.applicant ?? "Applicant"}
+                          </p>
                           <p className="text-xs text-muted-foreground">
-                            {q.id} · {q.scheme} · {q.state}
+                            {q.application_number ?? q.id}
+                            {q.scheme ? ` · ${q.scheme}` : ""}
                           </p>
                         </div>
                       </div>
                       <div className="flex shrink-0 items-center gap-3">
                         <span className="hidden text-xs text-muted-foreground sm:block">
-                          {q.stage}
+                          {q.sla_days} days
                         </span>
-                        <span
-                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${q.sla < 0 ? "bg-destructive text-destructive-foreground" : "bg-muted text-muted-foreground"}`}
-                        >
-                          {q.sla < 0 ? `${Math.abs(q.sla)}d overdue` : `${q.sla}d left`}
-                        </span>
-                        <StatusBadge
-                          status={
-                            q.priority === "High"
-                              ? "High Priority"
-                              : q.priority === "Medium"
-                                ? "Medium"
-                                : "Cleared"
-                          }
-                        />
-                        <span className="text-xs font-semibold text-primary">{score}</span>
+                        <Priority level={q.priority} />
+                        <StatusBadge status={q.stage} />
+                        {q.score != null ? (
+                          <span className="text-xs font-semibold text-primary">{q.score}</span>
+                        ) : null}
                       </div>
                     </button>
-                    {i < officerQueue2.length - 1 ? <hr className="mx-3 border-dashed" /> : null}
+                    {i < Math.min(queue.length, 6) - 1 ? (
+                      <hr className="mx-3 border-dashed" />
+                    ) : null}
                   </li>
-                );
-              })}
-            </ul>
+                ))}
+              </ul>
+            )}
           </CardContent>
         </Card>
 
@@ -136,11 +133,11 @@ function OfficerDashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-3">
-              <ul>
-                {officerGrievances
-                  .filter((g) => g.status !== "Resolved")
-                  .slice(0, 3)
-                  .map((g, i) => (
+              {openGrievances.length === 0 ? (
+                <p className="p-4 text-sm text-muted-foreground">No open grievances.</p>
+              ) : (
+                <ul>
+                  {openGrievances.slice(0, 3).map((g, i) => (
                     <li key={g.id}>
                       <button
                         type="button"
@@ -150,17 +147,18 @@ function OfficerDashboard() {
                         }
                       >
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">{g.category}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {g.id} · {g.applicant}
-                          </p>
+                          <p className="truncate text-sm font-medium">{g.subject}</p>
+                          <p className="text-xs text-muted-foreground">{g.id}</p>
                         </div>
                         <StatusBadge status={g.status} />
                       </button>
-                      {i < 2 ? <hr className="mx-3 border-dashed" /> : null}
+                      {i < Math.min(openGrievances.length, 3) - 1 ? (
+                        <hr className="mx-3 border-dashed" />
+                      ) : null}
                     </li>
                   ))}
-              </ul>
+                </ul>
+              )}
             </CardContent>
           </Card>
 
@@ -169,15 +167,21 @@ function OfficerDashboard() {
               <CardTitle className="text-base">Recent notifications</CardTitle>
             </CardHeader>
             <CardContent className="p-3">
-              <ul>
-                {notifications.slice(0, 2).map((n, i) => (
-                  <li key={i} className="rounded-lg p-3">
-                    <p className="text-sm font-medium">{n.title}</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">{n.time}</p>
-                    {i < 1 ? <hr className="mt-3 border-dashed" /> : null}
-                  </li>
-                ))}
-              </ul>
+              {notifications.length === 0 ? (
+                <p className="p-4 text-sm text-muted-foreground">No notifications.</p>
+              ) : (
+                <ul>
+                  {notifications.slice(0, 2).map((n, i) => (
+                    <li key={n.id} className="rounded-lg p-3">
+                      <p className="text-sm font-medium">{n.title}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {n.created_at ? new Date(n.created_at).toLocaleString() : ""}
+                      </p>
+                      {i < 1 ? <hr className="mt-3 border-dashed" /> : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </CardContent>
           </Card>
 
@@ -186,10 +190,14 @@ function OfficerDashboard() {
               <TrendingUp className="size-4 text-primary" aria-hidden /> SLA outlook
             </p>
             <p className="mt-2 font-medium">
-              {totalSla - 7} of {totalSla} applications are meeting service levels
+              {withinSla} of {queue.length} applications are within the {SLA_TARGET_DAYS}-day target
             </p>
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
-              <div className="h-full w-[79%] rounded-full bg-primary" aria-hidden />
+              <div
+                className="h-full rounded-full bg-primary"
+                style={{ width: `${slaPct}%` }}
+                aria-hidden
+              />
             </div>
           </div>
         </div>

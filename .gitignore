@@ -43,3 +43,5 @@ backend/docs/
 MoTA_Frontend_Backend_Integration_Plan.md
 frontend/Frontend_FRD.md
 
+storage/**
+test-suite.db/

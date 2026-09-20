@@ -9,15 +9,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PageHeader, StatusBadge, DocumentCard } from "@/components/mota/bits";
+import { PageHeader, DocumentCard } from "@/components/mota/bits";
 import { UploadZone } from "@/components/mota/UploadZone";
 import { DocumentViewer } from "@/components/mota/DocumentViewer";
 import { useApplicationQuery } from "@/hooks/api/useApplications";
 import { useDocumentsQuery } from "@/hooks/api/useDocuments";
+import { useSchemeVersionDocumentsQuery } from "@/hooks/api/useSchemes";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query/queryKeys";
 import { useState } from "react";
-import { ArrowRight, ShieldCheck, Upload, TriangleAlert, Loader2 } from "lucide-react";
+import { ArrowRight, ShieldCheck, Upload, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes } from "@/lib/utils";
 
@@ -25,14 +26,18 @@ export const Route = createFileRoute("/portal/applications/$id/documents")({
   component: DocumentsForApplication,
 });
 
-const DOCUMENT_SLOTS = [
-  { value: "MARKSHEET", label: "Academic Marksheet / Transcript" },
-  { value: "CASTE_CERTIFICATE", label: "Scheduled Tribe (ST) Certificate" },
-  { value: "INCOME_CERTIFICATE", label: "Income Certificate / Self-Declaration" },
-  { value: "ENROLMENT_CERTIFICATE", label: "Institution Admission / Enrolment Proof" },
-  { value: "BANK_PASSBOOK", label: "Bank Passbook / Cancelled Cheque" },
-  { value: "AADHAAR_CARD", label: "Aadhaar / Identity Proof" },
-  { value: "OTHER", label: "Other Supporting Document" },
+const FALLBACK_SLOTS = [
+  { value: "MARKSHEET", label: "Academic Marksheet / Transcript", required: true },
+  { value: "CASTE_CERTIFICATE", label: "Scheduled Tribe (ST) Certificate", required: true },
+  { value: "INCOME_CERTIFICATE", label: "Income Certificate / Self-Declaration", required: true },
+  {
+    value: "ENROLMENT_CERTIFICATE",
+    label: "Institution Admission / Enrolment Proof",
+    required: true,
+  },
+  { value: "BANK_PASSBOOK", label: "Bank Passbook / Cancelled Cheque", required: true },
+  { value: "AADHAAR_CARD", label: "Aadhaar / Identity Proof", required: true },
+  { value: "OTHER", label: "Other Supporting Document", required: false },
 ];
 
 function DocumentsForApplication() {
@@ -40,15 +45,27 @@ function DocumentsForApplication() {
   const qc = useQueryClient();
   const appQuery = useApplicationQuery(id);
   const documentsQuery = useDocumentsQuery({ application_id: id });
-  const [selectedSlot, setSelectedSlot] = useState("MARKSHEET");
 
   const app = appQuery.data;
+  const versionId = app?.scheme_version_id;
+  const schemeDocsQuery = useSchemeVersionDocumentsQuery(versionId ?? "");
+
+  const schemeDocs =
+    schemeDocsQuery.data && schemeDocsQuery.data.length > 0
+      ? schemeDocsQuery.data
+          .filter((d) => d.status === "ACTIVE")
+          .map((d) => ({ value: d.document_code, label: d.label, required: Boolean(d.required) }))
+      : FALLBACK_SLOTS;
+
+  const [selectedSlot, setSelectedSlot] = useState(schemeDocs[0]?.value ?? "MARKSHEET");
+
   const rawDocs = documentsQuery.data ?? [];
   const documents = rawDocs.map((document) => {
     const size = document["size"];
     const versions = document["versions"];
     const filename = String(document["filename"] || document["document_type"] || "Document");
     const docStatus = String(document["status"] || "PENDING");
+    const slot = schemeDocs.find((s) => s.value === document["document_type"]);
     return {
       ...document,
       name: filename,
@@ -56,9 +73,11 @@ function DocumentsForApplication() {
       size: size ? formatBytes(String(size)) : "—",
       versions: Number(versions ?? 1),
       status: docStatus,
-      required: true,
+      required: slot ? slot.required : true,
     };
   });
+  const availableDocs = new Set(rawDocs.map((d) => String(d["document_type"] ?? "")));
+  const missingRequired = schemeDocs.filter((s) => s.required && !availableDocs.has(s.value));
 
   const [preview, setPreview] = useState<string | null>(null);
   const previewDoc = documents.find((d) => d.id === preview || d.name === preview);
@@ -113,6 +132,24 @@ function DocumentsForApplication() {
         </Card>
       </div>
 
+      {missingRequired.length > 0 ? (
+        <Card className="mb-6 border-amber-400/40 bg-amber-400/10">
+          <CardContent className="flex items-center justify-between gap-3 p-4 text-sm">
+            <div className="flex items-start gap-2">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden />
+              <p className="text-foreground">
+                {missingRequired.length} required document{missingRequired.length > 1 ? "s" : ""}{" "}
+                missing:{" "}
+                <span className="font-medium">
+                  {missingRequired.map((s) => s.label).join(", ")}
+                </span>
+                . Upload before submitting your application.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <div className="grid gap-5 md:grid-cols-2">
         {documents.map((d) => (
           <div
@@ -130,7 +167,7 @@ function DocumentsForApplication() {
               <Upload className="size-4 text-primary" /> Upload Marksheets & Certificates
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Select the document type slot and upload your scanned PDF or clear photograph.
+              The available document slots follow the scheme checklist. Required slots are marked.
             </p>
             <div className="mt-3">
               <Label className="text-xs text-muted-foreground uppercase">Document Slot</Label>
@@ -139,9 +176,10 @@ function DocumentsForApplication() {
                   <SelectValue placeholder="Select document type" />
                 </SelectTrigger>
                 <SelectContent>
-                  {DOCUMENT_SLOTS.map((s) => (
+                  {schemeDocs.map((s) => (
                     <SelectItem key={s.value} value={s.value}>
                       {s.label}
+                      {s.required ? " (Required)" : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>

@@ -36,41 +36,11 @@ function NotificationTemplates() {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
 
-  const rawTemplates: NotificationTemplateItem[] =
-    (templatesQuery.data as { data?: NotificationTemplateItem[] })?.data ||
-    (Array.isArray(templatesQuery.data)
-      ? (templatesQuery.data as NotificationTemplateItem[])
-      : []) ||
-    [];
+  const rawTemplates: NotificationTemplateItem[] = Array.isArray(templatesQuery.data)
+    ? (templatesQuery.data as NotificationTemplateItem[])
+    : [];
 
-  const defaultTemplates: NotificationTemplateItem[] = [
-    {
-      id: "tmpl-1",
-      code: "APPLICATION_SUBMITTED",
-      channel: "EMAIL",
-      subject: "Application Submitted Successfully",
-      body: "Your application {{application_id}} for {{scheme_name}} has been received and queued for verification.",
-      published: true,
-    },
-    {
-      id: "tmpl-2",
-      code: "DEFICIENCY_RAISED",
-      channel: "EMAIL",
-      subject: "Action Required: Deficiency Raised",
-      body: "A deficiency has been raised on your application {{application_id}}. Please resolve before {{deadline}}.",
-      published: true,
-    },
-    {
-      id: "tmpl-3",
-      code: "AWARD_SANCTIONED",
-      channel: "EMAIL",
-      subject: "Congratulations: Fellowship Sanctioned",
-      body: "Your award has been approved. The sanction order reference is {{sanction_ref}}.",
-      published: true,
-    },
-  ];
-
-  const templates = rawTemplates.length > 0 ? rawTemplates : defaultTemplates;
+  const templates = rawTemplates;
 
   const handleCreateTemplate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -128,25 +98,37 @@ function NotificationTemplates() {
               <CardTitle className="text-base">Configured templates ({templates.length})</CardTitle>
             </CardHeader>
             <CardContent className="p-4 space-y-4">
-              {templates.map((t: NotificationTemplateItem) => (
-                <div key={t.id || t.code} className="rounded-lg border p-4 bg-card space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs font-semibold bg-accent px-2 py-0.5 rounded text-accent-foreground">
-                        {t.code}
+              {templatesQuery.isLoading ? (
+                <p className="py-6 text-sm text-muted-foreground">Loading templates…</p>
+              ) : templatesQuery.isError ? (
+                <p className="py-6 text-sm text-destructive">We could not load templates.</p>
+              ) : templates.length === 0 ? (
+                <p className="py-6 text-sm text-muted-foreground">
+                  No notification templates have been published yet.
+                </p>
+              ) : (
+                templates.map((t: NotificationTemplateItem) => (
+                  <div key={t.id || t.code} className="rounded-lg border p-4 bg-card space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs font-semibold bg-accent px-2 py-0.5 rounded text-accent-foreground">
+                          {t.code}
+                        </span>
+                        <span className="text-xs text-muted-foreground uppercase">{t.channel}</span>
+                      </div>
+                      <span className="rounded-full bg-leaf/10 px-2.5 py-0.5 text-xs font-semibold text-leaf">
+                        Published
                       </span>
-                      <span className="text-xs text-muted-foreground uppercase">{t.channel}</span>
                     </div>
-                    <span className="rounded-full bg-leaf/10 px-2.5 py-0.5 text-xs font-semibold text-leaf">
-                      Published
-                    </span>
+                    {t.subject && (
+                      <p className="text-sm font-medium text-foreground">{t.subject}</p>
+                    )}
+                    <p className="text-xs text-muted-foreground bg-muted/40 p-2.5 rounded font-mono break-words">
+                      {t.body}
+                    </p>
                   </div>
-                  {t.subject && <p className="text-sm font-medium text-foreground">{t.subject}</p>}
-                  <p className="text-xs text-muted-foreground bg-muted/40 p-2.5 rounded font-mono break-words">
-                    {t.body}
-                  </p>
-                </div>
-              ))}
+                ))
+              )}
             </CardContent>
           </Card>
         </div>

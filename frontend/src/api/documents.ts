@@ -38,7 +38,7 @@ export function presignUpload(data: Record<string, unknown>) {
 
 export function uploadDocumentFile(formData: FormData, params?: Record<string, string>) {
   return api.post<DocumentMeta>("/documents", formData, { params }).catch((err) => {
-    // The backend proxies the file to ImageKit (or local fallback). Surface the
+    // The backend proxies the file to Cloudinary (or local fallback). Surface the
     // real cause of 503-style storage failures instead of a generic message.
     if (
       err &&
@@ -47,7 +47,7 @@ export function uploadDocumentFile(formData: FormData, params?: Record<string, s
       (err as { status: number }).status === 503
     ) {
       const wrapped = new Error(
-        "Cloud document storage (ImageKit) is temporarily unavailable. Your file was not uploaded — please try again shortly.",
+        "Cloud document storage (Cloudinary) is temporarily unavailable. Your file was not uploaded — please try again shortly.",
       );
       (wrapped as { status?: number }).status = 503;
       throw wrapped;

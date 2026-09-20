@@ -1,20 +1,20 @@
+# Environments & Secrets
 .env
-__pycache__/
-.pytest_cache/
-*.pyc
+.env.*
+!.env.example
+
+# Local Databases & Backups
 *.db
-.venv/
+*.sqlite3
+*.zip
+*.tar.gz
+project_backup.zip
 
-# Environments
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+# Application Storage & Sensitive Uploads
+backend/storage/
+storage/
+**/storage/documents/
 
-# IDE and OS
-.idea/
-.vscode/
-.DS_Store
-*.swp
-*.swo
+# Server Logs
+*.log
+backend/uvicorn*.log

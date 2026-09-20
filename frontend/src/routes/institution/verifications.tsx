@@ -3,10 +3,9 @@ import { PageHeader, StatusBadge, KpiCard } from "@/components/mota/bits";
 import { DataTable, type Column } from "@/components/mota/DataTable";
 import { FilterBar, type FilterBarDef } from "@/components/mota/FilterBar";
 import { useApplicationsQuery } from "@/hooks/api/useApplications";
-
-type Row = Record<string, unknown>;
-import { useState } from "react";
-import { Clock, ListChecks, ShieldCheck, TimerReset } from "lucide-react";
+import type { Application } from "@/api/applications";
+import { useMemo, useState } from "react";
+import { Clock, ListChecks, TimerReset } from "lucide-react";
 
 export const Route = createFileRoute("/institution/verifications")({
   head: () => ({
@@ -15,60 +14,31 @@ export const Route = createFileRoute("/institution/verifications")({
   component: VerificationQueue,
 });
 
-const filters: FilterBarDef<Row>[] = [
+const columns: Column<Application>[] = [
   {
-    key: "type",
-    label: "Verification type",
-    placeholder: "All types",
-    options: [
-      { value: "Admission", label: "Admission" },
-      { value: "Enrollment", label: "Enrollment" },
-      { value: "Programme", label: "Programme" },
-      { value: "Research", label: "Research" },
-    ],
-  },
-  {
-    key: "status",
-    label: "Status",
-    placeholder: "All statuses",
-    options: [
-      { value: "Pending", label: "Pending" },
-      { value: "Cleared", label: "Cleared" },
-      { value: "Need Clarification", label: "Need clarification" },
-    ],
-  },
-];
-
-const columns: Column<Row>[] = [
-  {
-    key: "id",
-    header: "Ref ID",
-    sortValue: (r) => r.id,
-    cell: (r) => <span className="font-semibold">{r.id}</span>,
-  },
-  {
-    key: "application",
+    key: "application_number",
     header: "Application",
-    sortValue: (r) => r.application,
-    cell: (r) => <span>{r.application}</span>,
+    sortValue: (r) => r.application_number ?? r.id,
+    cell: (r) => <span className="font-semibold">{r.application_number ?? r.id.slice(0, 8)}</span>,
   },
   {
-    key: "student",
-    header: "Student",
-    sortValue: (r) => r.student,
-    cell: (r) => <span className="font-medium">{r.student}</span>,
+    key: "cycle",
+    header: "Cycle",
+    sortValue: (r) => r.cycle,
+    cell: (r) => <span className="text-muted-foreground">{r.cycle}</span>,
   },
   {
-    key: "type",
-    header: "Type",
-    sortValue: (r) => r.type,
-    cell: (r) => <span className="text-muted-foreground">{r.type}</span>,
+    key: "current_version",
+    header: "Version",
+    sortValue: (r) => r.current_version,
+    cell: (r) => <span className="text-muted-foreground">v{r.current_version}</span>,
+    hideBelowMd: true,
   },
   {
-    key: "course",
-    header: "Course",
-    sortValue: (r) => r.course,
-    cell: (r) => <span className="text-muted-foreground">{r.course}</span>,
+    key: "created_at",
+    header: "Submitted",
+    sortValue: (r) => r.created_at,
+    cell: (r) => <span className="text-xs text-muted-foreground">{formatDate(r.created_at)}</span>,
     hideBelowLg: true,
   },
   {
@@ -77,32 +47,49 @@ const columns: Column<Row>[] = [
     sortValue: (r) => r.status,
     cell: (r) => <StatusBadge status={r.status} />,
   },
-  {
-    key: "due",
-    header: "Due",
-    sortValue: (r) => r.due,
-    cell: (r) => <span className="text-xs text-muted-foreground">{r.due}</span>,
-    hideBelowLg: true,
-  },
 ];
+
+function formatDate(value: string) {
+  return value ? new Date(value).toLocaleDateString() : "—";
+}
+
+function daysSince(value: string) {
+  if (!value) return 0;
+  return Math.floor((Date.now() - new Date(value).getTime()) / 86_400_000);
+}
 
 function VerificationQueue() {
   const navigate = useNavigate();
   const {
-    data: institutionVerifications = [],
+    data: applications = [],
     isLoading,
     isError,
-  } = useApplicationsQuery({ stage: "institution" });
-  const [filtersValue, setFiltersValue] = useState<Record<string, string>>({});
-  const applied = (Object.keys(filtersValue) as (keyof typeof filtersValue)[]).some(
-    (k) => !!filtersValue[k],
-  );
-
-  const filtered = institutionVerifications.filter((r) => {
-    if (filtersValue.type && r.type !== filtersValue.type) return false;
-    if (filtersValue.status && r.status !== filtersValue.status) return false;
-    return true;
+  } = useApplicationsQuery({
+    stage: "institution",
   });
+  const [filtersValue, setFiltersValue] = useState<Record<string, string>>({});
+
+  const statuses = useMemo(
+    () => Array.from(new Set(applications.map((a) => a.status).filter(Boolean))).sort(),
+    [applications],
+  );
+  const filters: FilterBarDef<Application>[] = [
+    {
+      key: "status",
+      label: "Status",
+      placeholder: "All statuses",
+      options: statuses.map((s) => ({ value: s, label: s })),
+    },
+  ];
+
+  const filtered = applications.filter(
+    (a) => !filtersValue["status"] || a.status === filtersValue["status"],
+  );
+  const clearedCount = applications.filter((a) => a.status === "INSTITUTION_VERIFIED").length;
+  const pendingCount = applications.length - clearedCount;
+  const overdueCount = applications.filter(
+    (a) => a.status !== "INSTITUTION_VERIFIED" && daysSince(a.created_at) >= 7,
+  ).length;
 
   if (isLoading)
     return <p className="py-8 text-sm text-muted-foreground">Loading verification queue…</p>;
@@ -110,17 +97,18 @@ function VerificationQueue() {
     return (
       <p className="py-8 text-sm text-destructive">We could not load the verification queue.</p>
     );
+
   return (
     <div>
       <PageHeader
         title="Verification queue"
-        desc="Verification records requested against your institution's applicants."
+        desc="Applications from your institution awaiting verification."
       />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
-        <KpiCard label="Pending" value="3" icon={Clock} />
-        <KpiCard label="Cleared" value="1" icon={ListChecks} />
-        <KpiCard label="Overdue" value="0" icon={TimerReset} />
+        <KpiCard label="Pending" value={String(pendingCount)} icon={Clock} />
+        <KpiCard label="Cleared" value={String(clearedCount)} icon={ListChecks} />
+        <KpiCard label="Overdue (7+ days)" value={String(overdueCount)} icon={TimerReset} />
       </div>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -136,16 +124,16 @@ function VerificationQueue() {
         data={filtered}
         columns={columns}
         getRowKey={(r) => r.id}
-        searchPlaceholder="Search student, application or type"
-        searchKeys={(r) => `${r.id} ${r.application} ${r.student} ${r.type}`}
-        onRowClick={(r) =>
-          navigate({ to: "/institution/applications/$id", params: { id: r.application } })
-        }
+        searchPlaceholder="Search application or cycle"
+        searchKeys={(r) => `${r.application_number ?? r.id} ${r.cycle} ${r.status}`}
+        onRowClick={(r) => navigate({ to: "/institution/applications/$id", params: { id: r.id } })}
+        emptyTitle="Verification queue is clear"
+        emptyDesc="Applications assigned to your institution will appear here."
       />
 
-      {!applied && filtered.length > 0 ? (
+      {filtered.length > 0 ? (
         <p className="mt-3 text-xs text-muted-foreground">
-          Showing {filtered.length} of {institutionVerifications.length} verification records.
+          Showing {filtered.length} of {applications.length} applications.
         </p>
       ) : null}
     </div>

@@ -3,7 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/mota/bits";
-import { useGrievanceQuery } from "@/hooks/api/useGrievances";
+import { useAddGrievanceMessageMutation, useGrievanceQuery } from "@/hooks/api/useGrievances";
+import { useCurrentUserQuery } from "@/hooks/api/useAuth";
 import { useState } from "react";
 import { ArrowRight, Send } from "lucide-react";
 import { toast } from "sonner";
@@ -15,26 +16,33 @@ export const Route = createFileRoute("/portal/grievances/$id")({
 function GrievanceDetail() {
   const { id } = Route.useParams();
   const query = useGrievanceQuery(id);
-  const g = query.data;
+  const userQuery = useCurrentUserQuery();
+  const addMessage = useAddGrievanceMessageMutation();
   const [reply, setReply] = useState("");
+  const g = query.data;
+
   if (query.isLoading)
     return <p className="py-12 text-sm text-muted-foreground">Loading grievance…</p>;
   if (query.isError || !g)
     return <p className="py-12 text-sm text-destructive">We could not load this grievance.</p>;
-  const raised = g.created_at ? new Date(g.created_at).toLocaleDateString() : "—";
-  const scheme = String(g.scheme_name ?? "—");
 
-  const messages = [
-    { role: "me", text: g.subject, at: `${raised}, 10:14 am` },
-    {
-      role: "grievance",
-      text: `Reference ${g.id} received and assigned to the grievance cell.`,
-      at: `${raised}, 3:40 pm`,
-    },
-    ...(g.response
-      ? [{ role: "grievance" as const, text: g.response, at: "13 September 2026, 12:05 pm" }]
-      : []),
-  ];
+  const raised = g.created_at ? new Date(g.created_at).toLocaleDateString() : "—";
+  const currentUserId = userQuery.data?.id;
+  const messages = g.messages ?? [];
+
+  const send = () => {
+    if (!reply.trim()) return;
+    addMessage.mutate(
+      { id, data: { message: reply.trim() } },
+      {
+        onSuccess: () => {
+          setReply("");
+          toast.success("Reply sent to grievance cell");
+        },
+        onError: (err) => toast.error(err instanceof Error ? err.message : "Could not send reply"),
+      },
+    );
+  };
 
   return (
     <div>
@@ -43,7 +51,7 @@ function GrievanceDetail() {
         desc={g.subject}
         action={
           <span
-            className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${g.status === "Resolved" ? "bg-leaf/10 text-leaf" : "bg-accent text-accent-foreground"}`}
+            className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${g.status === "Resolved" || g.status === "CLOSED" ? "bg-leaf/10 text-leaf" : "bg-accent text-accent-foreground"}`}
           >
             {g.status}
           </span>
@@ -56,18 +64,30 @@ function GrievanceDetail() {
             <CardTitle className="text-base">Conversation thread</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 p-6">
-            {messages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === "me" ? "justify-end" : "justify-start"}`}>
-                <div
-                  className={`max-w-[85%] rounded-xl border p-4 ${m.role === "me" ? "bg-accent/60" : "bg-card shadow-card"}`}
-                >
-                  <p className="text-sm">{m.text}</p>
-                  <p className="mt-2 text-xs text-muted-foreground">{m.at}</p>
-                </div>
+            <div className="flex justify-end">
+              <div className="max-w-[85%] rounded-xl border bg-accent/60 p-4">
+                <p className="text-sm">{g.description}</p>
+                <p className="mt-2 text-xs text-muted-foreground">{raised}</p>
               </div>
-            ))}
+            </div>
 
-            {g.status !== "Resolved" ? (
+            {messages.map((m) => {
+              const mine = currentUserId != null && m.author_id === currentUserId;
+              return (
+                <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+                  <div
+                    className={`max-w-[85%] rounded-xl border p-4 ${mine ? "bg-accent/60" : "bg-card shadow-card"}`}
+                  >
+                    <p className="text-sm">{m.message}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {m.created_at ? new Date(m.created_at).toLocaleString() : ""}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+
+            {g.status !== "CLOSED" ? (
               <div className="border-t pt-4">
                 <Textarea
                   value={reply}
@@ -76,14 +96,9 @@ function GrievanceDetail() {
                   placeholder="Add details or clarification for the grievance cell…"
                 />
                 <div className="mt-3 flex justify-end">
-                  <Button
-                    disabled={!reply.trim()}
-                    onClick={() => {
-                      toast.success("Reply sent to grievance cell");
-                      setReply("");
-                    }}
-                  >
-                    <Send className="size-4" aria-hidden /> Send reply
+                  <Button disabled={!reply.trim() || addMessage.isPending} onClick={send}>
+                    <Send className="size-4" aria-hidden />
+                    {addMessage.isPending ? "Sending…" : "Send reply"}
                   </Button>
                 </div>
               </div>
@@ -97,10 +112,12 @@ function GrievanceDetail() {
               <CardTitle className="text-base">Case details</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 p-5 text-sm">
-              <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">Scheme</span>
-                <span className="font-medium">{scheme}</span>
-              </div>
+              {g.category ? (
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">Category</span>
+                  <span className="font-medium">{g.category}</span>
+                </div>
+              ) : null}
               <div className="flex justify-between gap-3">
                 <span className="text-muted-foreground">Raised on</span>
                 <span className="font-medium">{raised}</span>
@@ -110,8 +127,10 @@ function GrievanceDetail() {
                 <span className="font-medium">{g.status}</span>
               </div>
               <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">Assigned to</span>
-                <span className="font-medium">Grievance Cell, MoTA</span>
+                <span className="text-muted-foreground">Assigned</span>
+                <span className="font-medium">
+                  {g.assigned_to ? "Assigned" : "Pending assignment"}
+                </span>
               </div>
             </CardContent>
           </Card>

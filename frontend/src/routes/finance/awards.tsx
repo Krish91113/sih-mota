@@ -3,9 +3,8 @@ import { PageHeader, StatusBadge, KpiCard } from "@/components/mota/bits";
 import { DataTable, type Column } from "@/components/mota/DataTable";
 import { FilterBar, type FilterBarDef } from "@/components/mota/FilterBar";
 import { useAwardsQuery } from "@/hooks/api/useFinance";
-
-type Row = Record<string, unknown>;
-import { useState } from "react";
+import type { Award } from "@/api/finance";
+import { useMemo, useState } from "react";
 import { BadgeCheck, Landmark, Wallet } from "lucide-react";
 
 export const Route = createFileRoute("/finance/awards")({
@@ -15,32 +14,7 @@ export const Route = createFileRoute("/finance/awards")({
   component: FinanceAwards,
 });
 
-const filters: FilterBarDef<Row>[] = [
-  {
-    key: "scheme",
-    label: "Scheme",
-    placeholder: "All schemes",
-    options: [
-      { value: "NFST", label: "NFST" },
-      { value: "NOS", label: "NOS" },
-      { value: "TCE", label: "Top Class Education" },
-      { value: "PMS", label: "PMS" },
-    ],
-  },
-  {
-    key: "status",
-    label: "Status",
-    placeholder: "All statuses",
-    options: [
-      { value: "Sanctioned", label: "Sanctioned" },
-      { value: "Disbursing", label: "Disbursing" },
-      { value: "Disbursed", label: "Disbursed" },
-      { value: "Closed", label: "Closed" },
-    ],
-  },
-];
-
-const columns: Column<Row>[] = [
+const columns: Column<Award>[] = [
   {
     key: "id",
     header: "Award",
@@ -48,29 +22,42 @@ const columns: Column<Row>[] = [
     cell: (r) => <span className="font-semibold">{r.id}</span>,
   },
   {
-    key: "application",
+    key: "application_id",
     header: "Application",
-    sortValue: (r) => r.application,
-    cell: (r) => <span>{r.application}</span>,
+    sortValue: (r) => r.application_id,
+    cell: (r) => (
+      <span className="font-mono text-xs text-muted-foreground">{r.application_id}</span>
+    ),
   },
   {
-    key: "applicant",
-    header: "Beneficiary",
-    sortValue: (r) => r.applicant,
-    cell: (r) => <span className="font-medium">{r.applicant}</span>,
-  },
-  {
-    key: "scheme",
-    header: "Scheme",
-    sortValue: (r) => r.scheme,
-    cell: (r) => <span className="text-muted-foreground">{r.scheme}</span>,
+    key: "scheme_version_id",
+    header: "Scheme version",
+    sortValue: (r) => String(r.scheme_version_id ?? ""),
+    cell: (r) => (
+      <span className="text-muted-foreground">{String(r.scheme_version_id ?? "—")}</span>
+    ),
     hideBelowMd: true,
   },
   {
-    key: "sanctioned",
-    header: "Sanctioned",
-    sortValue: (r) => r.sanctioned,
-    cell: (r) => <span className="font-medium">{r.sanctioned}</span>,
+    key: "award_date",
+    header: "Awarded on",
+    sortValue: (r) => String(r.award_date ?? ""),
+    cell: (r) => (
+      <span className="text-muted-foreground">
+        {r.award_date ? new Date(String(r.award_date)).toLocaleDateString() : "—"}
+      </span>
+    ),
+    hideBelowMd: true,
+  },
+  {
+    key: "amount",
+    header: "Amount",
+    sortValue: (r) => r.amount ?? 0,
+    cell: (r) => (
+      <span className="font-medium">
+        {typeof r.amount === "number" ? `₹${r.amount.toLocaleString()}` : "—"}
+      </span>
+    ),
   },
   {
     key: "status",
@@ -83,43 +70,37 @@ const columns: Column<Row>[] = [
 function FinanceAwards() {
   const [filtersValue, setFiltersValue] = useState<Record<string, string>>({});
   const { data: financeAwards = [], isLoading, isError } = useAwardsQuery();
-  const filtered = (financeAwards as Row[]).filter((r) => {
-    if (filtersValue.scheme && r.scheme !== filtersValue.scheme) return false;
-    if (filtersValue.status && r.status !== filtersValue.status) return false;
-    return true;
-  });
 
-  const sanctionedCount = (financeAwards as Row[]).filter(
-    (a) => a.status === "Sanctioned" || a.status === "SANCTIONED",
-  ).length;
-  const disbursingCount = (financeAwards as Row[]).filter(
-    (a) => a.status === "Disbursing" || a.status === "DISBURSING",
-  ).length;
-  const disbursedCount = (financeAwards as Row[]).filter(
-    (a) =>
-      a.status === "Disbursed" ||
-      a.status === "DISBURSED" ||
-      a.status === "Closed" ||
-      a.status === "CLOSED",
-  ).length;
-  const totalAmount = (financeAwards as Row[]).reduce((sum, a) => {
-    const val =
-      typeof a.amount === "number" ? a.amount : typeof a.sanctioned === "number" ? a.sanctioned : 0;
-    return sum + val;
-  }, 0);
+  const statuses = useMemo(
+    () => Array.from(new Set(financeAwards.map((a) => a.status).filter(Boolean))).sort(),
+    [financeAwards],
+  );
+  const filters: FilterBarDef<Award>[] = [
+    {
+      key: "status",
+      label: "Status",
+      placeholder: "All statuses",
+      options: statuses.map((s) => ({ value: s, label: s })),
+    },
+  ];
+
+  const filtered = financeAwards.filter(
+    (a) => !filtersValue["status"] || a.status === filtersValue["status"],
+  );
+  const activeCount = financeAwards.filter((a) => a.status === "ACTIVE").length;
+  const totalAmount = financeAwards.reduce((sum, a) => sum + (a.amount ?? 0), 0);
 
   return (
     <div>
       <PageHeader title="Awards" desc="Every sanctioned award with its current payment state." />
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-4">
-        <KpiCard label="Sanctioned" value={String(sanctionedCount)} icon={BadgeCheck} />
-        <KpiCard label="Disbursing" value={String(disbursingCount)} icon={Wallet} />
-        <KpiCard label="Disbursed + closed" value={String(disbursedCount)} icon={Landmark} />
+      <div className="mb-6 grid gap-4 sm:grid-cols-3">
+        <KpiCard label="Total awards" value={String(financeAwards.length)} icon={BadgeCheck} />
+        <KpiCard label="Active awards" value={String(activeCount)} icon={Wallet} />
         <KpiCard
           label="Total value"
           value={totalAmount > 0 ? `₹${totalAmount.toLocaleString()}` : "—"}
-          icon={Wallet}
+          icon={Landmark}
         />
       </div>
 
@@ -136,15 +117,15 @@ function FinanceAwards() {
         <p className="py-8 text-sm text-muted-foreground">Loading awards…</p>
       ) : isError ? (
         <p className="py-8 text-sm text-destructive">We could not load awards.</p>
-      ) : filtered.length === 0 ? (
-        <p className="py-8 text-sm text-muted-foreground">No awards are available.</p>
       ) : (
         <DataTable
           data={filtered}
           columns={columns}
           getRowKey={(r) => r.id}
-          searchPlaceholder="Search award, application or beneficiary"
-          searchKeys={(r) => `${r.id} ${r.application} ${r.applicant} ${r.scheme}`}
+          searchPlaceholder="Search award or application"
+          searchKeys={(r) => `${r.id} ${r.application_id} ${r.status}`}
+          emptyTitle="No awards available"
+          emptyDesc="Awards appear here once an approved application is sanctioned."
         />
       )}
     </div>

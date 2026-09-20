@@ -1,18 +1,20 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader, KpiCard } from "@/components/mota/bits";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { cn } from "@/lib/utils";
 import {
   CheckCircle2,
-  ShieldCheck,
   Mail,
   Database,
   Image,
   Landmark,
   Server,
+  Sparkles,
   TriangleAlert,
+  RefreshCw,
 } from "lucide-react";
 
 export const Route = createFileRoute("/admin/integrations")({
@@ -20,65 +22,108 @@ export const Route = createFileRoute("/admin/integrations")({
   component: Integrations,
 });
 
+interface IntegrationInfo {
+  mode: string;
+  configured: boolean;
+}
+
+interface HealthResponse {
+  status: string;
+  ai: string;
+  environment?: string;
+  integrations: {
+    storage?: IntegrationInfo;
+    email?: IntegrationInfo;
+    finance?: IntegrationInfo;
+    database?: IntegrationInfo;
+    ai?: IntegrationInfo;
+    [key: string]: IntegrationInfo | undefined;
+  };
+}
+
+const SERVICE_META: Record<
+  string,
+  { name: string; provider: string; desc: string; icon: typeof Server }
+> = {
+  storage: {
+    name: "Document & File Storage",
+    provider: "Cloudinary / local storage gateway",
+    desc: "Secure document upload and certificate storage for applications.",
+    icon: Image,
+  },
+  email: {
+    name: "Email / Notification Service",
+    provider: "SMTP relay",
+    desc: "Applicant status notifications, OTP delivery, and circular alerts.",
+    icon: Mail,
+  },
+  finance: {
+    name: "Finance / Disbursement Provider",
+    provider: "PFMS / treasury gateway",
+    desc: "Direct Benefit Transfer (DBT) and treasury disbursement reconciliation.",
+    icon: Landmark,
+  },
+  database: {
+    name: "PostgreSQL Database Stack",
+    provider: "Primary relational cluster",
+    desc: "ACID transactional datastore with audit logging.",
+    icon: Database,
+  },
+  ai: {
+    name: "AI Eligibility Assistant",
+    provider: "Optional language-model service",
+    desc: "Assisted eligibility checks and application guidance.",
+    icon: Sparkles,
+  },
+};
+
+function serviceStatus(info: IntegrationInfo | undefined, backendReachable: boolean): string {
+  if (!backendReachable) return "Unavailable";
+  if (!info || !info.configured) return "Not configured";
+  return "Operational";
+}
+
 function Integrations() {
   const healthQuery = useQuery({
     queryKey: ["admin", "health"],
-    queryFn: () => api.get<{ status: string; ai: string; integrations: string }>("/health"),
+    queryFn: () => api.get<HealthResponse>("/health"),
     retry: 1,
+    refetchInterval: 60 * 1000,
   });
 
   const backendReachable = !healthQuery.isError && healthQuery.data !== undefined;
-  const status = healthQuery.data?.status === "ok" ? "Operational" : "Unavailable";
-  const degraded = !backendReachable;
+  const health = healthQuery.data;
+  const overall = backendReachable
+    ? health?.status === "ok"
+      ? "Operational"
+      : "Degraded"
+    : "Unavailable";
+
+  const entries = Object.entries(health?.integrations ?? {}).filter(([key]) => SERVICE_META[key]);
 
   const services = [
     {
+      key: "api",
       name: "FastAPI Core API Gateway",
       provider: "Internal /api/v1",
-      status: degraded
-        ? "Unavailable"
-        : healthQuery.data?.status === "ok"
-          ? "Operational"
-          : "Degraded",
-      desc: "Handles core application workflow, authentication, and database transactions.",
+      desc: "Core application workflow, authentication, and database transactions.",
       icon: Server,
+      status: backendReachable ? "Operational" : "Unavailable",
     },
-    {
-      name: "ImageKit Document & File Storage",
-      provider:
-        healthQuery.data?.integrations === "imagekit" ? "ImageKit CDN Gateway" : "Storage backend",
-      status: degraded ? "Unavailable" : "Operational",
-      desc: "Secure encrypted document upload and certificate storage. Uploads fail with HTTP 503 when this gateway is down.",
-      icon: Image,
-    },
-    {
-      name: "Gmail / SMTP Notification Service",
-      provider: "Google SMTP Relay",
-      status: degraded ? "Unavailable" : "Operational",
-      desc: "Applicant status notifications, OTP delivery, and circular alerts.",
-      icon: Mail,
-    },
-    {
-      name: "PFMS / Public Financial Management System",
-      provider: "Ministry of Finance PFMS Gateway",
-      status: degraded ? "Unavailable" : "Operational",
-      desc: "Direct Benefit Transfer (DBT) and treasury disbursement reconciliation.",
-      icon: Landmark,
-    },
-    {
-      name: "DigiLocker & UIDAI Verification",
-      provider: "MeitY National Identity Stack",
-      status: degraded ? "Unavailable" : "Operational",
-      desc: "Automated Aadhaar e-KYC and digital caste certificate verification.",
-      icon: ShieldCheck,
-    },
-    {
-      name: "PostgreSQL Database Stack",
-      provider: "Primary Relational Cluster",
-      status: degraded ? "Unavailable" : "Operational",
-      desc: "ACID transactional datastore with row-level security and audit logging.",
-      icon: Database,
-    },
+    ...entries.flatMap(([key, info]) => {
+      const meta = SERVICE_META[key];
+      if (!meta || !info) return [];
+      return [
+        {
+          key,
+          name: meta.name,
+          provider: `${meta.provider} · ${info.mode}`,
+          desc: meta.desc,
+          icon: meta.icon,
+          status: serviceStatus(info, backendReachable),
+        },
+      ];
+    }),
   ];
 
   const operationalCount = services.filter((s) => s.status === "Operational").length;
@@ -93,22 +138,43 @@ function Integrations() {
       <div className="grid gap-4 sm:grid-cols-3">
         <KpiCard label="Connected services" value={String(services.length)} icon={Server} />
         <KpiCard label="Operational" value={String(operationalCount)} icon={CheckCircle2} />
-        <KpiCard label="API health" value={status} icon={degraded ? TriangleAlert : ShieldCheck} />
+        <KpiCard
+          label="API health"
+          value={overall}
+          icon={backendReachable ? CheckCircle2 : TriangleAlert}
+        />
       </div>
 
-      {degraded ? (
+      {backendReachable ? (
+        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          <span>
+            Environment: <span className="font-medium">{health?.environment ?? "unknown"}</span>
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => healthQuery.refetch()}
+            disabled={healthQuery.isFetching}
+          >
+            <RefreshCw
+              className={cn("mr-1.5 size-3.5", healthQuery.isFetching && "animate-spin")}
+            />
+            Refresh
+          </Button>
+        </div>
+      ) : (
         <p className="text-sm text-destructive">
           Backend gateway unreachable ({healthQuery.error?.message ?? "network error"}). Service
           status reflects that no integration is currently reachable.
         </p>
-      ) : null}
+      )}
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {services.map((svc) => {
           const Icon = svc.icon;
           const ok = svc.status === "Operational";
           return (
-            <Card key={svc.name} className="shadow-card flex flex-col justify-between">
+            <Card key={svc.key} className="shadow-card flex flex-col justify-between">
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                   <span className="rounded-lg bg-accent p-2 text-accent-foreground">

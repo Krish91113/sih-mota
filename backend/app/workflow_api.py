@@ -11,6 +11,7 @@ from app.core.audit import audit
 from app.domain.models import Application, User
 from app.domain.relational_models import SchemeWorkflow, ApplicationStatusHistory, WorkingCalendar, Holiday, IdempotencyRecord
 from app.domain.core_completion_models import WorkflowAssignment, WorkflowSLAEvent
+from app.core.access import application_for_actor
 router=APIRouter(tags=["Workflow and SLA"])
 def public(o): return {column.key: getattr(o, column.key) for column in o.__table__.columns}
 def get(db,c,i):
@@ -137,11 +138,11 @@ def escalate_assignment(id: str, body: EscalationIn, db: Session = Depends(get_d
 
 @router.get("/applications/{id}/available-transitions")
 def available(id:str,db:Session=Depends(get_db),user=Depends(current_user)):
-    app=get(db,Application,id); flow=db.scalar(select(SchemeWorkflow).where(SchemeWorkflow.scheme_version_id==app.scheme_version_id)); definition=flow.definition if flow else {}
+    app=application_for_actor(db,id,user); flow=db.scalar(select(SchemeWorkflow).where(SchemeWorkflow.scheme_version_id==app.scheme_version_id)); definition=flow.definition if flow else {}
     return {"success":True,"data":[x for x in definition.get("transitions",[]) if x.get("from")==app.status]}
 @router.post("/applications/{id}/transition")
 def transition(id:str,body:TransitionIn,db:Session=Depends(get_db),user=Depends(current_user),idempotency_key:str|None=Header(default=None,alias="Idempotency-Key")):
-    app=get(db,Application,id)
+    app=application_for_actor(db,id,user)
     if idempotency_key:
         old=db.scalar(select(IdempotencyRecord).where(IdempotencyRecord.key==idempotency_key,IdempotencyRecord.user_id==user.id,IdempotencyRecord.route==f"transition:{id}"))
         if old:

@@ -12,23 +12,7 @@ export const Route = createFileRoute("/finance/reconciliation")({
 });
 
 function FinanceReconciliation() {
-  const { data, isLoading, isError } = useFinanceReconciliationQuery();
-
-  const rawList: Array<Record<string, unknown>> =
-    (data as { data?: Array<Record<string, unknown>> })?.data ||
-    (Array.isArray(data) ? (data as Array<Record<string, unknown>>) : null) ||
-    [];
-  const reconciliation = rawList.map((r: Record<string, unknown>) => ({
-    id: String(r.id),
-    awardId: String(r.award_id || "—"),
-    amount: (r.amount ?? r.actual_amount ?? 0) as number,
-    expectedAmount: (r.expected_amount ?? null) as number | null,
-    difference: (r.difference ?? null) as number | null,
-    provider: String(r.provider || "PFMS"),
-    externalRef: String(r.external_reference || "—"),
-    status: String(r.status || "MATCHED"),
-    createdAt: (r.created_at as string) || null,
-  }));
+  const { data: reconciliation = [], isLoading, isError } = useFinanceReconciliationQuery();
 
   const matched = reconciliation.filter(
     (r) => r.status === "MATCHED" || r.status === "RECORDED",
@@ -72,26 +56,27 @@ function FinanceReconciliation() {
                   <div className="flex items-center gap-2">
                     <ArrowLeftRight className="size-4 text-primary" aria-hidden />
                     <span className="font-semibold">{rec.id}</span>
-                    <span className="text-xs text-muted-foreground">Award: {rec.awardId}</span>
+                    <span className="text-xs text-muted-foreground">Award: {rec.award_id}</span>
                   </div>
                   <StatusBadge status={rec.status} />
                 </div>
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-4 border-t pt-3 text-xs text-muted-foreground">
                   <div className="flex flex-wrap gap-4">
                     <span>
-                      Provider: <strong className="text-foreground">{rec.provider}</strong>
+                      Provider: <strong className="text-foreground">{rec.provider ?? "—"}</strong>
                     </span>
                     <span>
-                      Ref: <strong className="text-foreground">{rec.externalRef}</strong>
+                      Ref:{" "}
+                      <strong className="text-foreground">{rec.external_reference ?? "—"}</strong>
                     </span>
                     <span>
                       Amount:{" "}
                       <strong className="text-primary font-semibold">
-                        ₹{Number(rec.amount).toLocaleString()}
+                        {typeof rec.amount === "number" ? `₹${rec.amount.toLocaleString()}` : "—"}
                       </strong>
                     </span>
                   </div>
-                  {rec.createdAt && <span>{new Date(rec.createdAt).toLocaleDateString()}</span>}
+                  {rec.created_at && <span>{new Date(rec.created_at).toLocaleDateString()}</span>}
                 </div>
               </CardContent>
             </Card>

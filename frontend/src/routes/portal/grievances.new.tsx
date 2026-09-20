@@ -12,9 +12,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PageHeader } from "@/components/mota/bits";
-import { UploadZone } from "@/components/mota/UploadZone";
-import { useApplicationsQuery } from "@/hooks/api/useApplications";
+import { useCreateGrievanceMutation } from "@/hooks/api/useGrievances";
 import { useState } from "react";
+import { toast } from "sonner";
 import { CheckCircle2, MessageSquarePlus } from "lucide-react";
 
 export const Route = createFileRoute("/portal/grievances/new")({
@@ -35,12 +35,32 @@ const CATEGORIES = [
 
 function NewGrievance() {
   const navigate = useNavigate();
-  const [submitted, setSubmitted] = useState(false);
+  const createMutation = useCreateGrievanceMutation();
+  const [reference, setReference] = useState<string | null>(null);
   const [category, setCategory] = useState("");
-  const applicationsQuery = useApplicationsQuery();
-  const applications = applicationsQuery.data ?? [];
+  const [subject, setSubject] = useState("");
+  const [description, setDescription] = useState("");
 
-  if (submitted) {
+  const submit = () => {
+    if (!category || !subject.trim() || !description.trim()) {
+      toast.error("Select a category and add a subject and description.");
+      return;
+    }
+    createMutation.mutate(
+      { category, subject: subject.trim(), description: description.trim() },
+      {
+        onSuccess: (grievance) => {
+          setReference(grievance?.id ?? null);
+          toast.success("Grievance submitted");
+        },
+        onError: (err) => {
+          toast.error(err instanceof Error ? err.message : "Could not submit grievance");
+        },
+      },
+    );
+  };
+
+  if (reference) {
     return (
       <Card className="mx-auto max-w-xl border-leaf/30 shadow-lift">
         <CardContent className="flex flex-col items-center p-10 text-center">
@@ -49,8 +69,8 @@ function NewGrievance() {
           </span>
           <h1 className="mt-5 text-2xl">Grievance registered</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Reference <span className="font-semibold text-foreground">GRV-2026-1212</span> has been
-            assigned to the grievance cell. Escalation timelines apply if it stays unresolved.
+            Reference <span className="font-semibold text-foreground">{reference}</span> has been
+            registered. Escalation timelines apply if it stays unresolved.
           </p>
           <Button className="mt-6" onClick={() => navigate({ to: "/portal/grievances" })}>
             Track my grievances
@@ -64,7 +84,7 @@ function NewGrievance() {
     <div>
       <PageHeader
         title="Raise a grievance"
-        desc="Describe your issue in your own words. Redeemable only for genuine concerns — efforts to misuse may be penalised."
+        desc="Describe your issue in your own words. Only genuine concerns should be raised."
       />
 
       <div className="grid gap-8 lg:grid-cols-[1fr_20rem]">
@@ -75,37 +95,20 @@ function NewGrievance() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-5 p-6">
-            <div className="grid gap-5 sm:grid-cols-2">
-              <div>
-                <Label className="text-sm">Category</Label>
-                <Select value={category || undefined} onValueChange={setCategory}>
-                  <SelectTrigger className="mt-2 w-full">
-                    <SelectValue placeholder="Select a category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CATEGORIES.map((c) => (
-                      <SelectItem key={c} value={c}>
-                        {c}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-sm">Related application</Label>
-                <Select>
-                  <SelectTrigger className="mt-2 w-full">
-                    <SelectValue placeholder="Select application (optional)" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {applications.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.id}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            <div>
+              <Label className="text-sm">Category</Label>
+              <Select value={category || undefined} onValueChange={setCategory}>
+                <SelectTrigger className="mt-2 w-full">
+                  <SelectValue placeholder="Select a category" />
+                </SelectTrigger>
+                <SelectContent>
+                  {CATEGORIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <Label htmlFor="g-subject" className="text-sm">
@@ -115,7 +118,8 @@ function NewGrievance() {
                 id="g-subject"
                 className="mt-2"
                 placeholder="Brief summary of the issue"
-                required
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
               />
             </div>
             <div>
@@ -126,17 +130,12 @@ function NewGrievance() {
                 id="g-body"
                 className="mt-2 min-h-32"
                 placeholder="Explain what happened, when, and what you expect to be resolved."
-                required
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
               />
               <p className="mt-2 text-xs text-muted-foreground">
                 Do not include Aadhaar or your full bank account number.
               </p>
-            </div>
-            <div>
-              <p className="text-sm">Supporting evidence (optional)</p>
-              <div className="mt-2">
-                <UploadZone onUploaded={() => undefined} />
-              </div>
             </div>
           </CardContent>
         </Card>
@@ -145,10 +144,9 @@ function NewGrievance() {
           <div className="rounded-xl border bg-card p-5 text-xs text-muted-foreground shadow-card">
             <p className="text-sm font-semibold text-foreground">What happens next</p>
             <ol className="mt-3 list-inside list-decimal space-y-2">
-              <li>Grievance cell acknowledge within 2 working days.</li>
+              <li>Grievance cell acknowledges within 2 working days.</li>
               <li>Resolved cases are closed with a written reply.</li>
               <li>Unresolved grievances escalate to the nodal officer next.</li>
-              <li>Incorrect fields are returned as deficiencies on grievance.</li>
             </ol>
           </div>
           <Card className="shadow-card">
@@ -161,8 +159,8 @@ function NewGrievance() {
             <Button asChild variant="outline" className="flex-1">
               <Link to="/portal/grievances">Cancel</Link>
             </Button>
-            <Button className="flex-1" onClick={() => setSubmitted(true)}>
-              Submit grievance
+            <Button className="flex-1" onClick={submit} disabled={createMutation.isPending}>
+              {createMutation.isPending ? "Submitting…" : "Submit grievance"}
             </Button>
           </div>
         </aside>

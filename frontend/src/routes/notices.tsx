@@ -5,8 +5,7 @@ import { EmptyState } from "@/components/mota/bits";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { notices } from "@/lib/mock";
-import { Download } from "lucide-react";
+import { notices } from "@/content/publicContent";
 import { useState } from "react";
 
 export const Route = createFileRoute("/notices")({
@@ -75,9 +74,6 @@ function Notices() {
                 </div>
                 <h2 className="mt-3 text-lg leading-snug">{n.title}</h2>
                 <p className="mt-2 text-sm text-muted-foreground">{n.body}</p>
-                <Button variant="outline" size="sm" className="mt-4">
-                  <Download className="size-4" aria-hidden /> Download notice
-                </Button>
               </li>
             ))}
           </ul>

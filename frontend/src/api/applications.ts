@@ -9,6 +9,7 @@ export interface Application {
   cycle: string;
   status: string;
   current_version: number;
+  application_number?: string;
   created_at: string;
   updated_at: string;
   [key: string]: unknown;
@@ -49,13 +50,20 @@ export function getApplication(id: string) {
   return api.get<Application>(`/applications/${id}`);
 }
 
-export function createApplication(data: {
-  scheme_id: string;
-  scheme_version_id: string;
-  cycle: string;
-  answers?: Record<string, unknown>;
-}) {
-  return api.post<Application>("/applications", data);
+export function createApplication(
+  data: {
+    scheme_id: string;
+    scheme_version_id: string;
+    cycle: string;
+    answers?: Record<string, unknown>;
+  },
+  idempotencyKey?: string,
+) {
+  return api.post<Application>(
+    "/applications",
+    data,
+    idempotencyKey ? { headers: { "Idempotency-Key": idempotencyKey } } : {},
+  );
 }
 
 export function updateApplication(

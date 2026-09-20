@@ -1,11 +1,10 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/mota/bits";
 import { DataTable, type Column } from "@/components/mota/DataTable";
 import { FilterBar, type FilterBarDef } from "@/components/mota/FilterBar";
-import { useDocumentsQuery } from "@/hooks/api/useDocuments";
-
-type Row = Record<string, unknown>;
-import { useState } from "react";
+import { listDeficiencies, type Deficiency } from "@/api/deficiencies";
+import { useMemo, useState } from "react";
 
 export const Route = createFileRoute("/officer/deficiencies")({
   head: () => ({
@@ -14,30 +13,7 @@ export const Route = createFileRoute("/officer/deficiencies")({
   component: OfficerDeficiencies,
 });
 
-const filters: FilterBarDef<Row>[] = [
-  {
-    key: "severity",
-    label: "Severity",
-    placeholder: "All severities",
-    options: [
-      { value: "High", label: "High" },
-      { value: "Medium", label: "Medium" },
-      { value: "Low", label: "Low" },
-    ],
-  },
-  {
-    key: "status",
-    label: "Status",
-    placeholder: "All statuses",
-    options: [
-      { value: "Pending", label: "Pending" },
-      { value: "Responded", label: "Responded" },
-      { value: "Closed", label: "Closed" },
-    ],
-  },
-];
-
-const columns: Column<Row>[] = [
+const columns: Column<Deficiency>[] = [
   {
     key: "id",
     header: "Ref",
@@ -45,76 +21,102 @@ const columns: Column<Row>[] = [
     cell: (r) => <span className="font-semibold">{r.id}</span>,
   },
   {
-    key: "application",
+    key: "application_id",
     header: "Application",
-    sortValue: (r) => r.application,
-    cell: (r) => <span>{r.application}</span>,
+    sortValue: (r) => r.application_id,
+    cell: (r) => (
+      <span className="font-mono text-xs text-muted-foreground">{r.application_id}</span>
+    ),
   },
   {
-    key: "applicant",
-    header: "Applicant",
-    sortValue: (r) => r.applicant,
-    cell: (r) => <span className="font-medium">{r.applicant}</span>,
+    key: "type",
+    header: "Type",
+    sortValue: (r) => r.type,
+    cell: (r) => <span className="text-muted-foreground">{r.type}</span>,
+    hideBelowMd: true,
   },
   {
-    key: "issue",
+    key: "description",
     header: "Issue",
-    sortValue: (r) => r.issue,
-    cell: (r) => <span className="text-muted-foreground">{r.issue}</span>,
+    sortValue: (r) => r.description,
+    cell: (r) => <span className="text-muted-foreground">{r.description}</span>,
   },
   {
     key: "severity",
     header: "Severity",
     sortValue: (r) => r.severity,
-    cell: (r) => (
-      <span
-        className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${r.severity === "High" ? "bg-destructive text-destructive-foreground" : "bg-amber-100 text-amber-700"}`}
-      >
-        {r.severity}
-      </span>
-    ),
+    cell: (r) => <span className="font-medium">{r.severity}</span>,
   },
   {
     key: "status",
     header: "Status",
     sortValue: (r) => r.status,
-    cell: (r) => (
-      <span
-        className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${r.status === "Responded" ? "bg-leaf/10 text-leaf" : "bg-accent text-accent-foreground"}`}
-      >
-        {r.status}
-      </span>
-    ),
-    hideBelowMd: true,
+    cell: (r) => <span className="font-medium">{r.status}</span>,
   },
   {
     key: "deadline",
     header: "Deadline",
-    sortValue: (r) => r.deadline,
-    cell: (r) => <span className="text-xs text-muted-foreground">{r.deadline}</span>,
+    sortValue: (r) => r.deadline ?? "",
+    cell: (r) => (
+      <span className="text-xs text-muted-foreground">
+        {r.deadline ? new Date(r.deadline).toLocaleDateString() : "—"}
+      </span>
+    ),
     hideBelowLg: true,
   },
 ];
 
 function OfficerDeficiencies() {
-  const { data: officerDeficiencies = [], isLoading, isError } = useDocumentsQuery();
   const navigate = useNavigate();
   const [filtersValue, setFiltersValue] = useState<Record<string, string>>({});
+  const {
+    data: deficiencies = [],
+    isLoading,
+    isError,
+  } = useQuery({
+    queryKey: ["deficiencies", "officer"],
+    queryFn: () => listDeficiencies(),
+  });
 
-  const filtered = officerDeficiencies.filter((r) => {
-    if (filtersValue.severity && r.severity !== filtersValue.severity) return false;
-    if (filtersValue.status && r.status !== filtersValue.status) return false;
+  const severities = useMemo(
+    () => Array.from(new Set(deficiencies.map((d) => d.severity).filter(Boolean))).sort(),
+    [deficiencies],
+  );
+  const statuses = useMemo(
+    () => Array.from(new Set(deficiencies.map((d) => d.status).filter(Boolean))).sort(),
+    [deficiencies],
+  );
+
+  const filters: FilterBarDef<Deficiency>[] = [
+    {
+      key: "severity",
+      label: "Severity",
+      placeholder: "All severities",
+      options: severities.map((s) => ({ value: s, label: s })),
+    },
+    {
+      key: "status",
+      label: "Status",
+      placeholder: "All statuses",
+      options: statuses.map((s) => ({ value: s, label: s })),
+    },
+  ];
+
+  const filtered = deficiencies.filter((d) => {
+    if (filtersValue["severity"] && d.severity !== filtersValue["severity"]) return false;
+    if (filtersValue["status"] && d.status !== filtersValue["status"]) return false;
     return true;
   });
 
   if (isLoading) return <p className="py-8 text-sm text-muted-foreground">Loading deficiencies…</p>;
   if (isError)
     return <p className="py-8 text-sm text-destructive">We could not load deficiencies.</p>;
+
   return (
     <div>
       <PageHeader
         title="Deficiencies"
-        desc="Deficiencies raised in your name and their response status."
+        desc="Deficiencies raised across applications, with their current response status."
       />
       <div className="mb-4">
         <FilterBar
@@ -128,11 +130,13 @@ function OfficerDeficiencies() {
         data={filtered}
         columns={columns}
         getRowKey={(r) => r.id}
-        searchPlaceholder="Search reference, application or applicant"
-        searchKeys={(r) => `${r.id} ${r.application} ${r.applicant} ${r.issue}`}
+        searchPlaceholder="Search reference, application or issue"
+        searchKeys={(r) => `${r.id} ${r.application_id} ${r.description} ${r.type}`}
         onRowClick={(r) =>
-          navigate({ to: "/officer/applications/$id", params: { id: r.application } })
+          navigate({ to: "/officer/applications/$id", params: { id: r.application_id } })
         }
+        emptyTitle="No deficiencies"
+        emptyDesc="Deficiencies raised during scrutiny or verification appear here."
       />
     </div>
   );

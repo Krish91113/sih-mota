@@ -96,7 +96,7 @@ export function UploadZone({
         </span>
         <span className="text-sm font-medium">{label}</span>
         <span className="text-xs text-muted-foreground">
-          PDF, JPG or PNG up to {maxSizeMB} MB · stored securely via ImageKit CDN
+          PDF, JPG or PNG up to {maxSizeMB} MB · stored securely via Cloudinary CDN
         </span>
       </button>
       <input

@@ -188,8 +188,69 @@ async def send_notification(
 def list_notifications(db: Session = Depends(get_db), user=Depends(current_user), unread_only: bool = False):
     query = select(Notification).where(Notification.user_id == user.id)
     if unread_only:
-        query = query.where(Notification.delivered_at.is_(None))
-    return {"success": True, "data": [public(row) for row in db.scalars(query.order_by(Notification.created_at.desc())).all()]}
+        query = query.where(Notification.read_at.is_(None))
+    rows = db.scalars(query.order_by(Notification.created_at.desc())).all()
+    return {"success": True, "data": [public(row) for row in rows]}
+
+
+@router.get("/notifications/sent")
+def list_sent_notifications(
+    status: str | None = None,
+    channel: str | None = None,
+    db: Session = Depends(get_db),
+    user=Depends(require_roles("SUPER_ADMIN", "SCHEME_MANAGER", "GRIEVANCE_OFFICER")),
+):
+    query = select(Notification)
+    if status:
+        query = query.where(Notification.status == status)
+    if channel:
+        query = query.where(Notification.channel == channel)
+    rows = db.scalars(query.order_by(Notification.created_at.desc()).limit(200)).all()
+    recipients = {
+        row.id: row
+        for row in db.scalars(select(User).where(User.id.in_({n.user_id for n in rows}))).all()
+    } if rows else {}
+    data = []
+    for row in rows:
+        recipient = recipients.get(row.user_id)
+        data.append({**public(row), "recipient_email": recipient.email if recipient else None, "recipient_name": recipient.full_name if recipient else None})
+    return {"success": True, "data": data}
+
+
+class MarkReadIn(BaseModel):
+    notification_ids: list[str] = Field(default_factory=list)
+    all: bool = False
+
+
+@router.post("/notifications/mark-read")
+def mark_notifications_read(body: MarkReadIn, db: Session = Depends(get_db), user=Depends(current_user)):
+    from sqlalchemy import update
+    now = datetime.now(timezone.utc)
+    if body.all:
+        db.execute(
+            update(Notification)
+            .where(Notification.user_id == user.id, Notification.read_at.is_(None))
+            .values(read_at=now)
+        )
+    elif body.notification_ids:
+        db.execute(
+            update(Notification)
+            .where(Notification.user_id == user.id, Notification.id.in_(body.notification_ids))
+            .values(read_at=now)
+        )
+    db.commit()
+    return {"success": True, "data": {"marked_read": len(body.notification_ids) if not body.all else "all"}}
+
+
+@router.post("/notifications/{notification_id}/read")
+def mark_notification_read(notification_id: str, db: Session = Depends(get_db), user=Depends(current_user)):
+    row = get_or_404(db, Notification, notification_id)
+    if row.user_id != user.id:
+        raise Forbidden("Notification does not belong to this user")
+    if row.read_at is None:
+        row.read_at = datetime.now(timezone.utc)
+        db.commit()
+    return {"success": True, "data": public(row)}
 
 
 class TemplateIn(BaseModel):
@@ -282,6 +343,8 @@ async def add_grievance_message(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     grievance = get_or_404(db, Grievance, grievance_id)
+    if user.role == "APPLICANT" and grievance.created_by != user.id:
+        raise Forbidden("Grievance is not accessible to this user")
     if grievance.status == "CLOSED":
         raise InvalidTransition("Closed grievances cannot receive messages")
     if body.internal and user.role not in REPORT_ROLES and user.role != "SUPER_ADMIN":

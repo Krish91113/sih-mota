@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { queryKeys } from "@/lib/query/queryKeys";
 import * as adminApi from "@/api/admin";
 
 export function useCalendarsQuery() {
@@ -44,15 +43,6 @@ export function useCreateHolidayMutation() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "holidays"] });
     },
-  });
-}
-
-export function useApprovalsQueueQuery(
-  params?: Record<string, string | number | boolean | undefined>,
-) {
-  return useQuery({
-    queryKey: queryKeys.approvals.queue(),
-    queryFn: () => adminApi.getApprovalsQueue(params),
   });
 }
 

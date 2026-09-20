@@ -10,12 +10,17 @@ class Settings(BaseSettings):
     access_token_minutes: int = 30
     refresh_token_days: int = 14
     cors_origins: str = "http://localhost:3000,http://localhost:5173,http://localhost:8080"
+    cloudinary_cloud_name: str = ""
+    cloudinary_api_key: str = ""
+    cloudinary_api_secret: str = ""
+    cloudinary_folder: str = "mota"
     imagekit_endpoint: str = ""
     imagekit_public_key: str = ""
     imagekit_private_key: str = ""
     imagekit_folder: str = "mota/documents"
-    storage_provider: str = "mock"
+    storage_provider: str = "cloudinary"
     email_provider: str = "smtp"
+    finance_provider: str = "mock"
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 465
     smtp_username: str = Field(default="", validation_alias=AliasChoices("SMTP_USERNAME", "SMTP_USER"))
@@ -25,5 +30,4 @@ class Settings(BaseSettings):
     smtp_timeout_seconds: float = 20.0
     max_upload_bytes: int = 10485760
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-@lru_cache
 def get_settings(): return Settings()

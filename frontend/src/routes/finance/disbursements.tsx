@@ -1,11 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageHeader } from "@/components/mota/bits";
+import { PageHeader, StatusBadge } from "@/components/mota/bits";
 import { DataTable, type Column } from "@/components/mota/DataTable";
 import { FilterBar, type FilterBarDef } from "@/components/mota/FilterBar";
-import { useAwardsQuery } from "@/hooks/api/useFinance";
-
-type Row = Record<string, unknown>;
-import { useState } from "react";
+import { useFinanceRecordsQuery } from "@/hooks/api/useFinance";
+import type { FinanceRecord } from "@/api/finance";
+import { useMemo, useState } from "react";
 
 export const Route = createFileRoute("/finance/disbursements")({
   head: () => ({
@@ -14,30 +13,7 @@ export const Route = createFileRoute("/finance/disbursements")({
   component: FinanceDisbursements,
 });
 
-const filters: FilterBarDef<Row>[] = [
-  {
-    key: "batch",
-    label: "Batch",
-    placeholder: "All batches",
-    options: [
-      { value: "2026-B03", label: "2026-B03" },
-      { value: "2026-B02", label: "2026-B02" },
-      { value: "2026-B01", label: "2026-B01" },
-    ],
-  },
-  {
-    key: "status",
-    label: "Status",
-    placeholder: "All statuses",
-    options: [
-      { value: "Success", label: "Success" },
-      { value: "Failed — retry", label: "Failed — retry" },
-      { value: "Pending", label: "Pending" },
-    ],
-  },
-];
-
-const columns: Column<Row>[] = [
+const columns: Column<FinanceRecord>[] = [
   {
     key: "id",
     header: "Ref",
@@ -45,71 +21,73 @@ const columns: Column<Row>[] = [
     cell: (r) => <span className="font-semibold">{r.id}</span>,
   },
   {
-    key: "applicant",
-    header: "Beneficiary",
-    sortValue: (r) => r.applicant,
-    cell: (r) => <span className="font-medium">{r.applicant}</span>,
-  },
-  {
-    key: "award",
+    key: "award_id",
     header: "Award",
-    sortValue: (r) => r.award,
-    cell: (r) => <span className="text-muted-foreground">{r.award}</span>,
+    sortValue: (r) => r.award_id,
+    cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.award_id}</span>,
   },
   {
-    key: "batch",
-    header: "Batch",
-    sortValue: (r) => r.batch,
-    cell: (r) => <span className="text-muted-foreground">{r.batch}</span>,
+    key: "provider",
+    header: "Provider",
+    sortValue: (r) => String(r.provider ?? ""),
+    cell: (r) => <span className="text-muted-foreground">{String(r.provider ?? "—")}</span>,
     hideBelowMd: true,
   },
   {
-    key: "date",
-    header: "Date",
-    sortValue: (r) => r.date,
-    cell: (r) => <span className="text-muted-foreground">{r.date}</span>,
-    hideBelowMd: true,
+    key: "external_reference",
+    header: "Reference",
+    sortValue: (r) => String(r.external_reference ?? ""),
+    cell: (r) => (
+      <span className="text-muted-foreground">{String(r.external_reference ?? "—")}</span>
+    ),
+    hideBelowLg: true,
   },
   {
     key: "amount",
     header: "Amount",
-    sortValue: (r) => r.amount,
-    cell: (r) => <span className="font-medium">{r.amount}</span>,
-  },
-  {
-    key: "bank",
-    header: "Bank",
-    sortValue: (r) => r.bank,
-    cell: (r) => <span className="text-muted-foreground">{r.bank}</span>,
-    hideBelowLg: true,
+    sortValue: (r) => r.amount ?? 0,
+    cell: (r) => (
+      <span className="font-medium">
+        {typeof r.amount === "number" ? `₹${r.amount.toLocaleString()}` : "—"}
+      </span>
+    ),
   },
   {
     key: "status",
     header: "Status",
     sortValue: (r) => r.status,
-    cell: (r) => (
-      <span
-        className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${r.status === "Success" ? "bg-leaf/10 text-leaf" : "bg-destructive/10 text-destructive"}`}
-      >
-        {r.status}
-      </span>
-    ),
+    cell: (r) => <StatusBadge status={r.status} />,
   },
 ];
 
 function FinanceDisbursements() {
-  const { data: financeDisbursements = [], isLoading, isError } = useAwardsQuery();
+  const { data: records = [], isLoading, isError } = useFinanceRecordsQuery();
   const [filtersValue, setFiltersValue] = useState<Record<string, string>>({});
-  const filtered = financeDisbursements.filter((r) => {
-    if (filtersValue.batch && r.batch !== filtersValue.batch) return false;
-    if (filtersValue.status && r.status !== filtersValue.status) return false;
-    return true;
-  });
+
+  const statuses = useMemo(
+    () => Array.from(new Set(records.map((r) => r.status).filter(Boolean))).sort(),
+    [records],
+  );
+  const filters: FilterBarDef<FinanceRecord>[] = [
+    {
+      key: "status",
+      label: "Status",
+      placeholder: "All statuses",
+      options: statuses.map((s) => ({ value: s, label: s })),
+    },
+  ];
 
   if (isLoading)
     return <p className="py-8 text-sm text-muted-foreground">Loading disbursements…</p>;
   if (isError)
     return <p className="py-8 text-sm text-destructive">We could not load disbursements.</p>;
+
+  const disbursements = records.filter(
+    (r) =>
+      r.record_type === "DISBURSEMENT" &&
+      (!filtersValue["status"] || r.status === filtersValue["status"]),
+  );
+
   return (
     <div>
       <PageHeader
@@ -125,11 +103,13 @@ function FinanceDisbursements() {
         />
       </div>
       <DataTable
-        data={filtered}
+        data={disbursements}
         columns={columns}
         getRowKey={(r) => r.id}
-        searchPlaceholder="Search reference, beneficiary or award"
-        searchKeys={(r) => `${r.id} ${r.applicant} ${r.award} ${r.batch}`}
+        searchPlaceholder="Search reference, provider or award"
+        searchKeys={(r) => `${r.id} ${r.award_id} ${r.provider ?? ""} ${r.status}`}
+        emptyTitle="No disbursements recorded"
+        emptyDesc="Disbursement records appear here once payments are initiated against awards."
       />
     </div>
   );

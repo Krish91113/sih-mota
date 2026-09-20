@@ -51,6 +51,14 @@ export function useSchemeRulesQuery(versionId: string) {
   });
 }
 
+export function useSchemeVersionDocumentsQuery(versionId: string) {
+  return useQuery({
+    queryKey: queryKeys.schemeVersions.documents(versionId),
+    queryFn: () => schemesApi.getSchemeVersionDocuments(versionId),
+    enabled: !!versionId,
+  });
+}
+
 export function useCreateSchemeMutation() {
   const qc = useQueryClient();
   return useMutation({

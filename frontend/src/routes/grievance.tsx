@@ -3,8 +3,6 @@ import { PublicLayout } from "@/components/mota/PublicLayout";
 import { PageBanner } from "@/components/mota/PageBanner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { ShieldCheck, Timer, UserCheck } from "lucide-react";
 
 export const Route = createFileRoute("/grievance")({
@@ -76,19 +74,17 @@ function Grievance() {
             <CardContent className="p-6 md:p-8">
               <h2 className="text-xl">Track an existing grievance</h2>
               <p className="mt-2 text-sm text-muted-foreground">
-                Enter the ticket number issued when you submitted your grievance.
+                Grievances raised through the portal appear with their ticket number and live status
+                once you sign in. This keeps ticket details private to you.
               </p>
-              <form className="mt-5 space-y-4" onSubmit={(e) => e.preventDefault()}>
-                <div>
-                  <Label htmlFor="ticket">Ticket number</Label>
-                  <Input id="ticket" className="mt-2" placeholder="GRV-2026-1188" />
-                </div>
-                <div>
-                  <Label htmlFor="mob">Registered mobile number</Label>
-                  <Input id="mob" className="mt-2" placeholder="10-digit mobile number" />
-                </div>
-                <Button type="submit">Track grievance</Button>
-              </form>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <Button asChild>
+                  <Link to="/login">Sign in to track</Link>
+                </Button>
+                <Button asChild variant="outline">
+                  <Link to="/portal/grievances">Go to my grievances</Link>
+                </Button>
+              </div>
             </CardContent>
           </Card>
           <Card className="border-primary/25 bg-accent/40 shadow-card">

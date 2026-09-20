@@ -1,11 +1,10 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { PageHeader, Priority } from "@/components/mota/bits";
+import { PageHeader, Sla } from "@/components/mota/bits";
 import { DataTable, type Column } from "@/components/mota/DataTable";
 import { FilterBar, type FilterBarDef } from "@/components/mota/FilterBar";
-import { useApplicationsQuery } from "@/hooks/api/useApplications";
-
-type Row = Record<string, unknown>;
-import { useState } from "react";
+import { useApprovalsQueueQuery } from "@/hooks/api/useQueues";
+import type { QueueRow } from "@/api/queue";
+import { useMemo, useState } from "react";
 
 export const Route = createFileRoute("/approval/queue")({
   head: () => ({
@@ -14,112 +13,110 @@ export const Route = createFileRoute("/approval/queue")({
   component: ApprovalQueue,
 });
 
-const filters: FilterBarDef<Row>[] = [
+const columns: Column<QueueRow>[] = [
   {
-    key: "scheme",
-    label: "Scheme",
-    placeholder: "All schemes",
-    options: [
-      { value: "NFST", label: "NFST" },
-      { value: "NOS", label: "NOS" },
-      { value: "TCE", label: "Top Class Education" },
-      { value: "PMS", label: "PMS" },
-    ],
-  },
-  {
-    key: "committee",
-    label: "Committee",
-    placeholder: "All committee results",
-    options: [
-      { value: "Recommended", label: "Recommended" },
-      { value: "Not recommended", label: "Not recommended" },
-    ],
-  },
-  {
-    key: "institution",
-    label: "Institution",
-    placeholder: "All institution states",
-    options: [
-      { value: "Verified", label: "Verified" },
-      { value: "Pending", label: "Pending" },
-    ],
-  },
-];
-
-const columns: Column<Row>[] = [
-  {
-    key: "id",
+    key: "application_number",
     header: "Application",
-    sortValue: (r) => r.id,
-    cell: (r) => <span className="font-semibold">{r.id}</span>,
+    sortValue: (r) => r.application_number ?? r.id,
+    cell: (r) => <span className="font-semibold">{r.application_number ?? r.id}</span>,
   },
   {
     key: "applicant",
     header: "Applicant",
-    sortValue: (r) => r.applicant,
-    cell: (r) => <span className="font-medium">{r.applicant}</span>,
+    sortValue: (r) => r.applicant ?? "",
+    cell: (r) => <span className="font-medium">{r.applicant ?? "—"}</span>,
   },
   {
     key: "scheme",
     header: "Scheme",
-    sortValue: (r) => r.scheme,
-    cell: (r) => <span className="text-muted-foreground">{r.scheme}</span>,
+    sortValue: (r) => r.scheme_code ?? r.scheme ?? "",
+    cell: (r) => <span className="text-muted-foreground">{r.scheme ?? "—"}</span>,
     hideBelowMd: true,
   },
   {
     key: "score",
     header: "Score",
-    sortValue: (r) => r.score,
-    cell: (r) => <span className="font-semibold text-primary">{r.score}</span>,
+    sortValue: (r) => r.score ?? 0,
+    cell: (r) => (
+      <span className="font-semibold text-primary">
+        {r.score === null || r.score === undefined ? "—" : r.score}
+      </span>
+    ),
   },
   {
     key: "committee",
     header: "Committee",
-    sortValue: (r) => r.committee,
-    cell: (r) => <span className="text-muted-foreground">{r.committee}</span>,
+    sortValue: (r) => r.committee ?? "",
+    cell: (r) => <span className="text-muted-foreground">{r.committee ?? "Not recommended"}</span>,
   },
   {
     key: "scrutiny",
     header: "Scrutiny",
-    sortValue: (r) => r.scrutiny,
-    cell: (r) => <span className="text-muted-foreground">{r.scrutiny}</span>,
+    sortValue: (r) => r.scrutiny ?? "",
+    cell: (r) => <span className="text-muted-foreground">{r.scrutiny ?? "—"}</span>,
     hideBelowLg: true,
   },
   {
     key: "institution",
     header: "Institution",
-    sortValue: (r) => r.institution,
-    cell: (r) => <span className="text-muted-foreground">{r.institution}</span>,
+    sortValue: (r) => r.institution ?? "",
+    cell: (r) => <span className="text-muted-foreground">{r.institution ?? "—"}</span>,
     hideBelowLg: true,
   },
   {
-    key: "amount",
-    header: "Amount",
-    sortValue: (r) => r.amount,
-    cell: (r) => <span className="font-medium">{r.amount}</span>,
-    hideBelowLg: true,
-  },
-  {
-    key: "due",
-    header: "Due",
-    sortValue: (r) => r.due,
-    cell: (r) => <span className="text-xs text-muted-foreground">{r.due}</span>,
+    key: "sla_days",
+    header: "SLA",
+    sortValue: (r) => r.sla_days,
+    cell: (r) => <Sla days={r.sla_days} />,
   },
 ];
 
 function ApprovalQueue() {
   const navigate = useNavigate();
   const [filtersValue, setFiltersValue] = useState<Record<string, string>>({});
-  const {
-    data: approvalsQueue = [],
-    isLoading,
-    isError,
-  } = useApplicationsQuery({ status: "approval" });
+  const { data: approvalsQueue = [], isLoading, isError } = useApprovalsQueueQuery();
 
-  const filtered = (approvalsQueue as Row[]).filter((r) => {
-    if (filtersValue.scheme && r.scheme !== filtersValue.scheme) return false;
-    if (filtersValue.committee && r.committee !== filtersValue.committee) return false;
-    if (filtersValue.institution && r.institution !== filtersValue.institution) return false;
+  const schemeOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const row of approvalsQueue) {
+      const value = row.scheme_code ?? row.scheme;
+      if (value && !seen.has(value)) seen.set(value, row.scheme ?? value);
+    }
+    return [...seen.entries()].map(([value, label]) => ({ value, label }));
+  }, [approvalsQueue]);
+
+  const filters: FilterBarDef<QueueRow>[] = [
+    { key: "scheme", label: "Scheme", placeholder: "All schemes", options: schemeOptions },
+    {
+      key: "committee",
+      label: "Committee",
+      placeholder: "All committee results",
+      options: [
+        { value: "Recommended", label: "Recommended" },
+        { value: "Not recommended", label: "Not recommended" },
+      ],
+    },
+    {
+      key: "institution",
+      label: "Institution",
+      placeholder: "All institution states",
+      options: [
+        { value: "Verified", label: "Verified" },
+        { value: "Pending", label: "Pending" },
+      ],
+    },
+  ];
+
+  const filtered = approvalsQueue.filter((r) => {
+    if (filtersValue["scheme"] && (r.scheme_code ?? r.scheme) !== filtersValue["scheme"])
+      return false;
+    if (
+      filtersValue["committee"] &&
+      (r.committee ?? "Not recommended") !== filtersValue["committee"]
+    )
+      return false;
+    if (filtersValue["institution"] && (r.institution ?? "Pending") !== filtersValue["institution"])
+      return false;
     return true;
   });
 
@@ -149,7 +146,7 @@ function ApprovalQueue() {
           columns={columns}
           getRowKey={(r) => r.id}
           searchPlaceholder="Search application, applicant or scheme"
-          searchKeys={(r) => `${r.id} ${r.applicant} ${r.scheme}`}
+          searchKeys={(r) => `${r.application_number ?? ""} ${r.applicant ?? ""} ${r.scheme ?? ""}`}
           onRowClick={(r) => navigate({ to: "/approval/applications/$id", params: { id: r.id } })}
         />
       )}

@@ -5,10 +5,22 @@ import { Field, SectionHead } from "@/components/mota/bits";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useSchemeQuery } from "@/hooks/api/useSchemes";
+import { getScheme } from "@/api/schemes";
 import { BadgeCheck, CalendarClock, FileText } from "lucide-react";
 
 export const Route = createFileRoute("/schemes/$id")({
-  loader: ({ params }) => ({ id: params.id }),
+  loader: async ({ params }) => {
+    try {
+      const scheme = await getScheme(params.id);
+      return {
+        id: params.id,
+        name: scheme.name,
+        summary: scheme.description ?? undefined,
+      };
+    } catch {
+      return { id: params.id, name: undefined, summary: undefined };
+    }
+  },
   head: ({ loaderData }) => ({
     meta: [
       { title: `${loaderData?.name ?? "Scheme"} | MoTA Scholarships` },

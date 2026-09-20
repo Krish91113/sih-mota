@@ -4,11 +4,17 @@ import { Card, CardContent } from "@/components/ui/card";
 import { PageHeader, StatusBadge, Field } from "@/components/mota/bits";
 import {
   DynamicFormRenderer,
+  type FormFieldDef,
+  type FormSectionDef,
   type FormValues,
   isDefined,
 } from "@/components/mota/DynamicFormRenderer";
 import { Stepper, StepNav } from "@/components/mota/Stepper";
-import { useSchemesQuery, useFormDefinitionQuery } from "@/hooks/api/useSchemes";
+import {
+  useSchemesQuery,
+  useFormDefinitionQuery,
+  useSchemeVersionDocumentsQuery,
+} from "@/hooks/api/useSchemes";
 import { useCreateApplicationMutation } from "@/hooks/api/useApplications";
 import { useCurrentUserQuery, useApplicantProfileQuery } from "@/hooks/api/useAuth";
 import { useState } from "react";
@@ -40,7 +46,6 @@ function NewApplication() {
   const [schemeId, setSchemeId] = useState<string | null>(null);
   const [values, setValues] = useState<FormValues | null>(null);
   const [submittedId, setSubmittedId] = useState<string | null>(null);
-  const [submittedAppNumber, setSubmittedAppNumber] = useState<string | null>(null);
 
   const userQuery = useCurrentUserQuery();
   const profileQuery = useApplicantProfileQuery();
@@ -59,7 +64,9 @@ function NewApplication() {
     deadline: String(s.deadline ?? "To be announced"),
   }));
   const scheme = schemeOptions.find((s) => s.id === schemeId);
-  const formQuery = useFormDefinitionQuery(String(scheme?.scheme_version_id ?? ""));
+  const versionId = String(scheme?.scheme_version_id ?? "");
+  const formQuery = useFormDefinitionQuery(versionId);
+  const schemeDocsQuery = useSchemeVersionDocumentsQuery(versionId);
   const formDefinition = (formQuery.data ?? { sections: [], fields: [] }) as Record<
     string,
     unknown
@@ -78,21 +85,24 @@ function NewApplication() {
       return;
     }
 
+    const idempotencyKey = crypto.randomUUID();
     try {
       const res = await createMutation.mutateAsync({
-        scheme_id: scheme.id,
-        scheme_version_id: String(scheme.scheme_version_id),
-        cycle: "2026-2027",
-        answers: (values as Record<string, unknown>) || {},
+        data: {
+          scheme_id: scheme.id,
+          scheme_version_id: String(scheme.scheme_version_id),
+          cycle: "2026-2027",
+          answers: (values as Record<string, unknown>) || {},
+        },
+        idempotencyKey,
       });
 
-      const appNum = (res as any)?.application_number || (res as any)?.id || "APP-2026";
-      const appId = (res as any)?.id || appNum;
+      const appId = res?.id;
       setSubmittedId(appId);
-      setSubmittedAppNumber(appNum);
-      toast.success("Application created successfully!");
-    } catch (err: any) {
-      toast.error(err.message || "Failed to submit application");
+      toast.success("Draft application saved");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to save application";
+      toast.error(message);
     }
   };
 
@@ -104,12 +114,11 @@ function NewApplication() {
             <span className="rounded-full bg-leaf/10 p-4 text-leaf">
               <CheckCircle2 className="size-12" aria-hidden />
             </span>
-            <p className="eyebrow mt-6">Application Submitted</p>
-            <h1 className="mt-2 text-3xl">Your application was created</h1>
+            <p className="eyebrow mt-6">Draft Saved</p>
+            <h1 className="mt-2 text-3xl">Your application draft is ready</h1>
             <p className="mt-3 max-w-md text-sm text-muted-foreground">
-              Application number{" "}
-              <span className="font-semibold text-foreground">{submittedAppNumber || submittedId}</span>.
-              You can now upload your marksheets & certificates, and track your verification timeline.
+              Upload your marksheets & certificates, then submit your application to begin
+              verification.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               <Button
@@ -147,7 +156,7 @@ function NewApplication() {
     <div>
       <PageHeader
         title="New Application"
-        desc="Your persistent profile details are prefilled. Complete scheme-specific requirements and submit."
+        desc="Your persistent profile details are prefilled. Complete scheme-specific requirements, save the draft, then upload documents and submit."
       />
 
       <Stepper steps={STEP_TITLES} current={step} />
@@ -190,7 +199,9 @@ function NewApplication() {
                             </span>
                           </div>
                           <h3 className="mt-2 text-base font-semibold">{s.name}</h3>
-                          <p className="mt-1 text-sm text-muted-foreground">{detail?.summary || detail?.description}</p>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            {detail?.summary || detail?.description}
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -225,13 +236,13 @@ function NewApplication() {
             <DynamicFormRenderer
               definition={formDefinition}
               defaults={{
-                fullName: profileQuery.data?.full_name || user?.full_name || "Applicant",
-                dob: (profile?.personal as any)?.dob || "1999-03-14",
-                gender: (profile?.personal as any)?.gender?.toLowerCase() || "female",
-                tribe: (profile?.st as any)?.tribe?.toLowerCase() || "oraon",
-                mobile: (profile?.contact as any)?.mobile || "9876543210",
+                fullName: profileQuery.data?.full_name || user?.full_name || "",
+                dob: profile?.personal?.dob || "",
+                gender: profile?.personal?.gender?.toLowerCase() || "",
+                tribe: profile?.st?.tribe?.toLowerCase() || "",
+                mobile: profile?.contact?.mobile || "",
                 email: user?.email || "",
-                pursuingPhd: "true",
+                pursuingPhd: profile?.research?.status === "PURSUING_PHD" ? "true" : "false",
               }}
               onSubmit={handleFormSubmit}
               submitLabel="Continue to review"
@@ -246,14 +257,18 @@ function NewApplication() {
                   <BadgeCheck className="size-4" aria-hidden /> All required fields are complete
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Review the summary before submitting. After submission your application is saved to your account.
+                  Review the summary then save the draft. You will upload the required documents and
+                  formally submit afterwards.
                 </p>
               </div>
 
-              {formDefinition.sections && Array.isArray(formDefinition.sections) && formDefinition.sections.length > 0 ? (
-                (formDefinition.sections as any[]).map((section, si) => {
+              {formDefinition.sections &&
+              Array.isArray(formDefinition.sections) &&
+              formDefinition.sections.length > 0 ? (
+                (formDefinition.sections as FormSectionDef[]).map((section, si) => {
                   const filled = (section.fields || []).filter(
-                    (f: any) => !f.when || (values[f.when.field] as string) === f.when.equals,
+                    (f: FormFieldDef) =>
+                      !f.when || (values[f.when.field] as string) === f.when.equals,
                   );
                   return (
                     <Card key={section.id || si} className="shadow-card">
@@ -261,7 +276,7 @@ function NewApplication() {
                         <p className="eyebrow">Section {si + 1}</p>
                         <h3 className="mt-1 text-lg">{section.title}</h3>
                         <dl className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                          {filled.map((f: any) => (
+                          {filled.map((f: FormFieldDef) => (
                             <Field
                               key={f.id}
                               label={f.label}
@@ -283,7 +298,11 @@ function NewApplication() {
                     <h3 className="text-lg font-semibold">Application Summary</h3>
                     <dl className="mt-4 grid gap-4 sm:grid-cols-2">
                       {Object.entries(values).map(([k, v]) => (
-                        <Field key={k} label={k} value={Array.isArray(v) ? v.join(", ") : String(v ?? "—")} />
+                        <Field
+                          key={k}
+                          label={k}
+                          value={Array.isArray(v) ? v.join(", ") : String(v ?? "—")}
+                        />
                       ))}
                     </dl>
                   </CardContent>
@@ -295,15 +314,21 @@ function NewApplication() {
                   <Info className="size-4" aria-hidden /> Verification Process
                 </p>
                 <ul className="mt-2 list-inside list-disc space-y-1 text-muted-foreground">
-                  <li>Your submitted application will be routed to your institution for enrolment verification.</li>
-                  <li>You can upload supporting marksheets, income certificate, and caste proof on the next step.</li>
+                  <li>
+                    Your submitted application will be routed to your institution for enrolment
+                    verification.
+                  </li>
+                  <li>
+                    You can upload supporting marksheets, income certificate, and caste proof on the
+                    next step.
+                  </li>
                 </ul>
               </div>
 
               <StepNav
                 onPrev={() => setStep(1)}
                 onNext={handleFinalSubmit}
-                nextLabel={createMutation.isPending ? "Creating Application..." : "Submit application"}
+                nextLabel={createMutation.isPending ? "Saving Draft..." : "Save draft application"}
                 canNext={!createMutation.isPending}
               />
             </section>
@@ -341,23 +366,49 @@ function NewApplication() {
               <p className="flex items-center gap-2 text-sm font-semibold">
                 <FileText className="size-4 text-primary" aria-hidden /> Documents to keep ready
               </p>
-              <ul className="mt-3 space-y-2.5 text-sm text-muted-foreground">
-                {[
-                  "Caste / Tribe certificate",
-                  "Admission or enrolment proof",
-                  "Latest marksheet / transcript",
-                  "Income certificate, where applicable",
-                  "Bank passbook first page",
-                ].map((d) => (
-                  <li key={d} className="flex gap-2">
-                    <span
-                      className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary"
-                      aria-hidden
-                    />
-                    {d}
-                  </li>
-                ))}
-              </ul>
+              {schemeDocsQuery.data && schemeDocsQuery.data.length > 0 ? (
+                <>
+                  <ul className="mt-3 space-y-2.5 text-sm text-muted-foreground">
+                    {(schemeDocsQuery.data ?? [])
+                      .filter((d) => d["status"] === "ACTIVE")
+                      .map((d) => (
+                        <li key={String(d["id"] ?? d["document_code"])} className="flex gap-2">
+                          <span
+                            className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary"
+                            aria-hidden
+                          />
+                          <span>
+                            {String(d["label"] ?? d["document_code"])}
+                            {d["required"] ? (
+                              <span className="text-xs font-medium text-primary"> · Required</span>
+                            ) : null}
+                          </span>
+                        </li>
+                      ))}
+                  </ul>
+                  {schemeDocsQuery.isLoading ? (
+                    <p className="mt-3 text-xs text-muted-foreground">Loading checklist…</p>
+                  ) : null}
+                </>
+              ) : (
+                <ul className="mt-3 space-y-2.5 text-sm text-muted-foreground">
+                  {[
+                    "Caste / Tribe certificate",
+                    "Admission or enrolment proof",
+                    "Latest marksheet / transcript",
+                    "Income certificate, where applicable",
+                    "Bank passbook first page",
+                  ].map((d) => (
+                    <li key={d} className="flex gap-2">
+                      <span
+                        className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary"
+                        aria-hidden
+                      />
+                      {d}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </CardContent>
           </Card>
         </aside>

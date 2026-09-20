@@ -18,21 +18,10 @@ from app.rbac.models import Role, Permission, UserRole, RolePermission, UserScop
 from app.rbac.constants import PERMISSIONS, PermissionSpec
 from app.core.constants import RULE_OPERATORS
 from app.rbac.service import seed_permissions
+from app.core.access import application_for_actor, document_for_actor, get_or_404
+from app.core.status import move_application_status
 router=APIRouter(tags=["Relational Core"])
 def public(obj): return {k:v for k,v in obj.__dict__.items() if not k.startswith("_")}
-def get_or_404(db,cls,ident):
-    value=db.get(cls,ident)
-    if not value: raise NotFound(f"{cls.__name__} not found")
-    return value
-
-def application_for_actor(db, ident, user):
-    row = get_or_404(db, Application, ident)
-    if user.role in {"SUPER_ADMIN", "SCHEME_MANAGER", "VERIFICATION_OFFICER", "SCRUTINY_OFFICER", "APPROVING_AUTHORITY", "FINANCE_OFFICER", "AUDITOR", "MONITORING_ANALYST", "GRIEVANCE_OFFICER"}:
-        return row
-    applicant = db.get(Applicant, row.applicant_id)
-    if not applicant or applicant.user_id != user.id:
-        raise Forbidden("Application is outside the user's scope")
-    return row
 
 def role_guard(*roles): return Depends(require_roles(*roles))
 class RoleIn(BaseModel): name:str; description:str|None=None; is_active:bool=True
@@ -44,6 +33,7 @@ class WorkflowIn(BaseModel): name:str; version:int=1; definition:dict[str,Any]={
 class SchemeUpdate(BaseModel): name:str|None=None; description:str|None=None; active:bool|None=None
 class VersionCreate(BaseModel): version:str; configuration:dict[str,Any]={}
 class FormIn(BaseModel): fields:list[dict[str,Any]]=Field(default_factory=list); sections:list[dict[str,Any]]=Field(default_factory=list); conditional_rules:list[dict[str,Any]]=Field(default_factory=list)
+class SchemeDocumentIn(BaseModel): document_code:str; label:str; required:bool=True; status:str="ACTIVE"
 class RuleCreate(BaseModel): rule_id:str; name:str; field:str; operator:str; value:Any=None; source_reference:str; effective_from:datetime|None=None
 class SourceIn(BaseModel): title:str; document_type:str|None=None; document_reference:str; section_reference:str|None=None; page_reference:str|None=None; source_url:str|None=None; effective_from:datetime|None=None; effective_to:datetime|None=None; uploaded_document_id:str|None=None; source_reference:str; status:str="ACTIVE"
 class AppCreate(BaseModel):
@@ -53,7 +43,6 @@ class AppCreate(BaseModel):
     answers: dict[str, Any] = Field(default_factory=dict)
     form_data: dict[str, Any] = Field(default_factory=dict)
     institution_id: str | None = None
-    status: str | None = None
 class AnswerPatch(BaseModel): answers:dict[str,Any]; reason:str|None=None; expected_version:int|None=None
 class InstitutionIn(BaseModel): code:str; name:str; institution_type:str|None=None; state:str|None=None; district:str|None=None
 class VerificationIn(BaseModel): result:str; fields:dict[str,Any]={}; note:str|None=None
@@ -246,6 +235,41 @@ def add_source(id:str,body:SourceIn,db:Session=Depends(get_db),user=role_guard("
 @router.get("/scheme-versions/{id}/sources")
 def list_sources(id:str,db:Session=Depends(get_db),user=Depends(current_user)): return {"success":True,"data":[public(x) for x in db.scalars(select(SchemeSourceDocument).where(SchemeSourceDocument.scheme_version_id==id)).all()]}
 
+@router.get("/scheme-versions/{id}/documents")
+def get_scheme_version_documents(id: str, db: Session = Depends(get_db), user = Depends(current_user)):
+    get_or_404(db, SchemeVersion, id)
+    docs = db.scalars(select(SchemeDocument).where(SchemeDocument.scheme_version_id == id)).all()
+    return {"success": True, "data": [public(d) for d in docs]}
+
+@router.post("/scheme-versions/{id}/documents", status_code=201)
+def add_scheme_version_document(id: str, body: SchemeDocumentIn, db: Session = Depends(get_db), user = role_guard("SCHEME_MANAGER")):
+    version = get_or_404(db, SchemeVersion, id)
+    if version.status == "PUBLISHED":
+        raise Immutable("Published scheme versions are immutable")
+    existing = db.scalar(select(SchemeDocument).where(SchemeDocument.scheme_version_id == id, SchemeDocument.document_code == body.document_code))
+    if existing:
+        existing.label = body.label
+        existing.required = body.required
+        existing.status = body.status
+        row = existing
+    else:
+        row = SchemeDocument(scheme_version_id=id, document_code=body.document_code, label=body.label, required=body.required, status=body.status)
+        db.add(row)
+    audit(db, "SCHEME_DOCUMENT_CONFIGURED", user.id, "SCHEME_DOCUMENT", row.id, body.model_dump())
+    db.commit()
+    return {"success": True, "data": public(row)}
+
+@router.delete("/scheme-documents/{doc_id}")
+def delete_scheme_version_document(doc_id: str, db: Session = Depends(get_db), user = role_guard("SCHEME_MANAGER")):
+    row = get_or_404(db, SchemeDocument, doc_id)
+    version = get_or_404(db, SchemeVersion, row.scheme_version_id)
+    if version.status == "PUBLISHED":
+        raise Immutable("Published scheme versions are immutable")
+    db.delete(row)
+    audit(db, "SCHEME_DOCUMENT_DELETED", user.id, "SCHEME_DOCUMENT", doc_id)
+    db.commit()
+    return {"success": True, "data": {"deleted": True}}
+
 @router.get("/applicant/profile")
 def get_applicant_profile(db: Session = Depends(get_db), user = Depends(current_user)):
     applicant = db.scalar(select(Applicant).where(Applicant.user_id == user.id))
@@ -302,9 +326,9 @@ def real_create_application(body:AppCreate,db:Session=Depends(get_db),user=Depen
     if version.scheme_id!=body.scheme_id or version.status!="PUBLISHED": raise Conflict("Application must use a published version belonging to the scheme")
     existing=db.scalar(select(Application).where(Application.applicant_id==applicant.id,Application.scheme_id==body.scheme_id,Application.cycle==body.cycle))
     if existing:
-        # If existing application exists in draft, allow returning it or replacing it
+        if existing.scheme_version_id != body.scheme_version_id:
+            raise Conflict("An application for this scheme and cycle already exists with a different version. Please contact support if you need to change versions.")
         row = existing
-        row.scheme_version_id = body.scheme_version_id
     else:
         row=Application(application_number=f"APP-{datetime.now().year}-{uuid4_short()}",applicant_id=applicant.id,scheme_id=body.scheme_id,scheme_version_id=body.scheme_version_id,cycle=body.cycle,status="DRAFT",answers={}); db.add(row); db.flush()
     
@@ -315,16 +339,18 @@ def real_create_application(body:AppCreate,db:Session=Depends(get_db),user=Depen
         combined_answers.update(body.form_data)
     if body.institution_id:
         combined_answers["institution_id"] = body.institution_id
+
+    # Auto-link institution details from applicant's persistent profile if not set in answers
+    if applicant and applicant.profile and isinstance(applicant.profile, dict):
+        inst_prof = applicant.profile.get("institution", {})
+        if isinstance(inst_prof, dict):
+            if "institution_id" not in combined_answers and inst_prof.get("institution_id"):
+                combined_answers["institution_id"] = inst_prof.get("institution_id")
+            if "institution" not in combined_answers and inst_prof.get("name"):
+                combined_answers["institution"] = inst_prof.get("name")
+
     row.answers = combined_answers
     
-    # Link any unassigned locker documents to the newly created application
-    locker_docs = db.scalars(select(Document).where(Document.uploaded_by == user.id, Document.application_id.is_(None))).all()
-    for ldoc in locker_docs:
-        ldoc.application_id = row.id
-        
-    if body.status == "SUBMITTED":
-        row.status = "SUBMITTED"
-        
     db.add(ApplicationVersion(application_id=row.id,version_number=row.version,actor_id=user.id,reason="CREATED",snapshot=row.answers))
     audit(db,"APPLICATION_CREATED",user.id,"APPLICATION",row.id)
     db.commit()
@@ -347,18 +373,25 @@ def real_delete_application(id:str,db:Session=Depends(get_db),user=Depends(curre
     row.status="CLOSED"; audit(db,"APPLICATION_UPDATED",user.id,"APPLICATION",id,{"status":"CLOSED"}); db.commit(); return {"success":True,"data":{"closed":True}}
 @router.post("/documents/{id}/replace",status_code=201)
 def replace_document(id:str,file:UploadFile=File(...),db:Session=Depends(get_db),user=Depends(current_user),idempotency_key:str|None=Header(default=None,alias="Idempotency-Key")):
-    old=get_or_404(db,Document,id); content=file.file.read(); digest=sha256(content).hexdigest(); key=f"documents/{uuid.uuid4()}-{os.path.basename(file.filename or 'replacement')}"
+    from app.storage.service import get_storage_provider, StorageProviderError
+    from app.core.errors import IntegrationUnavailable
+    old=document_for_actor(db,id,user); content=file.file.read()
+    try:
+        stored=get_storage_provider().upload(content,os.path.basename(file.filename or "replacement"),file.content_type or "application/octet-stream")
+    except StorageProviderError as exc:
+        raise IntegrationUnavailable(str(exc),{"provider":exc.provider,"operation":"upload"}) from exc
+    digest=stored.sha256; key=stored.key
     if idempotency_key:
         prior=db.scalar(select(IdempotencyRecord).where(IdempotencyRecord.key==idempotency_key,IdempotencyRecord.user_id==user.id,IdempotencyRecord.route==f"replace-document:{id}"))
         if prior and prior.response is not None:return prior.response
         if prior: raise Conflict("Request already in progress")
         prior=IdempotencyRecord(key=idempotency_key,user_id=user.id,route=f"replace-document:{id}",request_hash=digest,status_code=201); db.add(prior)
     old.status="REPLACED"; version_no=(db.scalar(select(DocumentVersion.version_number).where(DocumentVersion.document_id==id).order_by(DocumentVersion.version_number.desc())) or 0)+1
-    replacement=Document(application_id=old.application_id,document_type=old.document_type,uploaded_by=user.id,filename=os.path.basename(file.filename or 'replacement'),mime=file.content_type or 'application/octet-stream',size=len(content),sha256=digest,storage_key=key,status="READY"); db.add(replacement); db.flush(); db.add(DocumentVersion(document_id=replacement.id,version_number=version_no,storage_key=key,sha256=digest,mime=replacement.mime,size=replacement.size,uploaded_by=user.id,status="READY")); audit(db,"DOCUMENT_REPLACED",user.id,"DOCUMENT",replacement.id,{"replaced_document_id":id}); result={"success":True,"data":public(replacement)}
+    replacement=Document(application_id=old.application_id,document_type=old.document_type,uploaded_by=user.id,filename=os.path.basename(file.filename or 'replacement'),mime=file.content_type or 'application/octet-stream',size=len(content),sha256=digest,storage_key=key,provider=stored.provider,status="READY"); db.add(replacement); db.flush(); db.add(DocumentVersion(document_id=replacement.id,version_number=version_no,storage_key=key,sha256=digest,mime=replacement.mime,size=replacement.size,uploaded_by=user.id,status="READY")); audit(db,"DOCUMENT_REPLACED",user.id,"DOCUMENT",replacement.id,{"replaced_document_id":id}); result={"success":True,"data":public(replacement)}
     if idempotency_key: prior.response=result
     db.commit(); return result
 @router.get("/documents/{id}/access-log")
-def document_access_log(id:str,db:Session=Depends(get_db),user=Depends(current_user)): return {"success":True,"data":[public(x) for x in db.scalars(select(DocumentAccessLog).where(DocumentAccessLog.document_id==id)).all()]}
+def document_access_log(id:str,db:Session=Depends(get_db),user=Depends(current_user)): document_for_actor(db,id,user); return {"success":True,"data":[public(x) for x in db.scalars(select(DocumentAccessLog).where(DocumentAccessLog.document_id==id)).all()]}
 @router.get("/institutions")
 def real_institutions(db:Session=Depends(get_db),user=Depends(current_user)): return {"success":True,"data":[public(x) for x in db.scalars(select(Institution)).all()]}
 @router.post("/institutions",status_code=201)
@@ -375,37 +408,113 @@ def real_institution_users(id:str,db:Session=Depends(get_db),user=Depends(curren
     get_or_404(db,Institution,id); rows=db.scalars(select(User).join(InstitutionUser,InstitutionUser.user_id==User.id).where(InstitutionUser.institution_id==id)).all(); return {"success":True,"data":[public(x) for x in rows]}
 @router.get("/deficiencies")
 def real_deficiencies(db:Session=Depends(get_db),user=Depends(current_user),status:str|None=None):
-    query=select(Deficiency); query=query.where(Deficiency.status==status) if status else query; return {"success":True,"data":[public(x) for x in db.scalars(query).all()]}
+    query=select(Deficiency)
+    if user.role=="APPLICANT":
+        a=db.scalar(select(Applicant).where(Applicant.user_id==user.id))
+        if not a: return {"success":True,"data":[]}
+        app_ids=db.scalars(select(Application.id).where(Application.applicant_id==a.id)).all()
+        query=query.where(Deficiency.application_id.in_(app_ids))
+    elif user.role=="INSTITUTION_NODAL_OFFICER":
+        inst_id=institution_id_for(db,user)
+        def _ids(inst):
+            rows=db.scalars(select(Application).where(Application.answers["institution"].as_string()==str(inst))).all()
+            return [r.id for r in rows]
+        app_ids=_ids(inst_id) if inst_id else []
+        query=query.where(Deficiency.application_id.in_(app_ids))
+    query=query.where(Deficiency.status==status) if status else query; return {"success":True,"data":[public(x) for x in db.scalars(query).all()]}
 @router.get("/applications/{id}/deficiencies")
-def application_deficiencies(id:str,db:Session=Depends(get_db),user=Depends(current_user)): return {"success":True,"data":[public(x) for x in db.scalars(select(Deficiency).where(Deficiency.application_id==id)).all()]}
+def application_deficiencies(id:str,db:Session=Depends(get_db),user=Depends(current_user)): application_for_actor(db,id,user); return {"success":True,"data":[public(x) for x in db.scalars(select(Deficiency).where(Deficiency.application_id==id)).all()]}
 @router.post("/applications/{id}/deficiencies",status_code=201)
 def raise_deficiency(id:str,body:DeficiencyIn,db:Session=Depends(get_db),user=role_guard("SCRUTINY_OFFICER","VERIFICATION_OFFICER")):
-    get_or_404(db,Application,id); row=Deficiency(application_id=id,raised_by=user.id,status="OPEN",**body.model_dump()); db.add(row); audit(db,"DEFICIENCY_RAISED",user.id,"DEFICIENCY",row.id); db.commit(); return {"success":True,"data":public(row)}
+    application_for_actor(db,id,user); row=Deficiency(application_id=id,raised_by=user.id,status="OPEN",**body.model_dump()); db.add(row); audit(db,"DEFICIENCY_RAISED",user.id,"DEFICIENCY",row.id); db.commit(); return {"success":True,"data":public(row)}
 @router.get("/deficiencies/{id}")
-def get_deficiency(id:str,db:Session=Depends(get_db),user=Depends(current_user)): return {"success":True,"data":public(get_or_404(db,Deficiency,id))}
+def get_deficiency(id:str,db:Session=Depends(get_db),user=Depends(current_user)):
+    row=get_or_404(db,Deficiency,id); application_for_actor(db,row.application_id,user); return {"success":True,"data":public(row)}
 @router.post("/deficiencies/{id}/respond")
 def respond_deficiency(id:str,body:ResponseIn,db:Session=Depends(get_db),user=Depends(current_user)):
-    row=get_or_404(db,Deficiency,id)
+    row=get_or_404(db,Deficiency,id); application_for_actor(db,row.application_id,user)
     if row.status not in ("OPEN","REOPENED"): raise InvalidTransition(f"Cannot respond from {row.status}")
     row.status="RESPONDED"; db.add(DeficiencyResponse(deficiency_id=id,responded_by=user.id,response=body.response,supporting_documents=body.supporting_documents)); audit(db,"DEFICIENCY_RESPONDED",user.id,"DEFICIENCY",id); db.commit(); return {"success":True,"data":public(row)}
 @router.post("/deficiencies/{id}/review")
 def review_deficiency(id:str,db:Session=Depends(get_db),user=role_guard("SCRUTINY_OFFICER","VERIFICATION_OFFICER")):
-    row=get_or_404(db,Deficiency,id)
+    row=get_or_404(db,Deficiency,id); application_for_actor(db,row.application_id,user)
     if row.status!="RESPONDED": raise InvalidTransition(f"Cannot review from {row.status}")
     row.status="UNDER_REVIEW"; db.commit(); return {"success":True,"data":public(row)}
 @router.post("/deficiencies/{id}/resolve")
 def resolve_deficiency(id:str,db:Session=Depends(get_db),user=role_guard("SCRUTINY_OFFICER","VERIFICATION_OFFICER")):
-    row=get_or_404(db,Deficiency,id)
+    row=get_or_404(db,Deficiency,id); application_for_actor(db,row.application_id,user)
     if row.status!="UNDER_REVIEW": raise InvalidTransition(f"Cannot resolve from {row.status}")
     row.status="RESOLVED"; audit(db,"DEFICIENCY_RESOLVED",user.id,"DEFICIENCY",id); db.commit(); return {"success":True,"data":public(row)}
 @router.post("/deficiencies/{id}/reopen")
 def reopen_deficiency(id:str,db:Session=Depends(get_db),user=role_guard("SCRUTINY_OFFICER","VERIFICATION_OFFICER")):
-    row=get_or_404(db,Deficiency,id); row.status="REOPENED"; audit(db,"DEFICIENCY_REOPENED",user.id,"DEFICIENCY",id); db.commit(); return {"success":True,"data":public(row)}
+    row=get_or_404(db,Deficiency,id); application_for_actor(db,row.application_id,user); row.status="REOPENED"; audit(db,"DEFICIENCY_REOPENED",user.id,"DEFICIENCY",id); db.commit(); return {"success":True,"data":public(row)}
 @router.get("/scrutiny/queue")
 def scrutiny_queue(db:Session=Depends(get_db),user=role_guard("SCRUTINY_OFFICER"),status:str|None=None):
     query=select(ScrutinyReview); query=query.where(ScrutinyReview.status==status) if status else query; return {"success":True,"data":[public(x) for x in db.scalars(query).all()]}
+
+
+OFFICER_QUEUE_STAGES = {
+    "SCRUTINY_OFFICER": ("INSTITUTION_VERIFIED", "RESUBMITTED"),
+    "VERIFICATION_OFFICER": ("SUBMITTED",),
+    "INSTITUTION_NODAL_OFFICER": ("SUBMITTED",),
+}
+
+
+def enriched_application_rows(db: Session, applications) -> list[dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    rows = []
+    for app in applications:
+        applicant = db.get(Applicant, app.applicant_id)
+        applicant_user = db.get(User, applicant.user_id) if applicant else None
+        scheme = db.get(Scheme, app.scheme_id)
+        created = app.created_at
+        if created and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        days = (now - created).days if created else 0
+        rows.append({
+            "id": app.id,
+            "application_number": app.application_number,
+            "applicant": applicant_user.full_name if applicant_user else None,
+            "applicant_id": app.applicant_id,
+            "scheme": scheme.name if scheme else None,
+            "scheme_code": scheme.code if scheme else None,
+            "scheme_id": app.scheme_id,
+            "stage": app.status,
+            "status": app.status,
+            "priority": "High" if days >= 14 else "Medium" if days >= 7 else "Low",
+            "sla_days": days,
+            "created_at": app.created_at,
+        })
+    return rows
+
+
+@router.get("/officer/queue")
+def officer_queue(db:Session=Depends(get_db),user=Depends(require_roles("SCRUTINY_OFFICER","VERIFICATION_OFFICER","INSTITUTION_NODAL_OFFICER","SUPER_ADMIN"))):
+    query = select(Application).where(Application.status != "DRAFT")
+    if user.role == "INSTITUTION_NODAL_OFFICER":
+        from app.core.access import institution_id_for
+        inst_id = institution_id_for(db, user)
+        if not inst_id:
+            return {"success": True, "data": []}
+        inst_row = db.get(Institution, inst_id)
+        inst_code = inst_row.code if inst_row else None
+        inst_name = inst_row.name if inst_row else None
+        apps = db.scalars(query).all()
+        matched = []
+        for x in apps:
+            ans = x.answers or {}
+            app_inst = str(ans.get("institution_id") or ans.get("institution") or ans.get("institutionName") or "")
+            if app_inst in (str(inst_id), str(inst_code), str(inst_name)) or (inst_name and inst_name.lower() in app_inst.lower()):
+                matched.append(x)
+        apps = matched
+    else:
+        stages = OFFICER_QUEUE_STAGES.get(user.role)
+        if stages:
+            query = query.where(Application.status.in_(stages))
+        apps = db.scalars(query.order_by(Application.created_at)).all()
+    return {"success": True, "data": enriched_application_rows(db, apps)}
 @router.get("/scrutiny/applications/{id}")
-def scrutiny_application(id:str,db:Session=Depends(get_db),user=Depends(current_user)): return {"success":True,"data":[public(x) for x in db.scalars(select(ScrutinyReview).where(ScrutinyReview.application_id==id)).all()]}
+def scrutiny_application(id:str,db:Session=Depends(get_db),user=role_guard("SCRUTINY_OFFICER","VERIFICATION_OFFICER","SUPER_ADMIN")): application_for_actor(db,id,user); return {"success":True,"data":[public(x) for x in db.scalars(select(ScrutinyReview).where(ScrutinyReview.application_id==id)).all()]}
 @router.post("/scrutiny/applications/{id}/start")
 def start_scrutiny(id:str,db:Session=Depends(get_db),user=role_guard("SCRUTINY_OFFICER")):
     get_or_404(db,Application,id); row=ScrutinyReview(application_id=id,officer_id=user.id,status="IN_PROGRESS",started_at=datetime.now(timezone.utc)); db.add(row); audit(db,"SCRUTINY_STARTED",user.id,"APPLICATION",id); db.commit(); return {"success":True,"data":public(row)}
@@ -416,23 +525,70 @@ def scrutiny_notes(id:str,body:ScrutinyNoteIn,db:Session=Depends(get_db),user=ro
     row.notes=(row.notes or "")+"\n"+body.note; db.commit(); return {"success":True,"data":public(row)}
 @router.post("/scrutiny/applications/{id}/complete")
 def complete_scrutiny(id:str,db:Session=Depends(get_db),user=role_guard("SCRUTINY_OFFICER")):
+    application = get_or_404(db, Application, id)
+    if application.status not in ("INSTITUTION_VERIFIED", "RESUBMITTED"):
+        raise InvalidTransition(f"Scrutiny cannot be completed from {application.status}")
     row=db.scalar(select(ScrutinyReview).where(ScrutinyReview.application_id==id,ScrutinyReview.officer_id==user.id).order_by(ScrutinyReview.created_at.desc()))
-    if not row: raise NotFound("Scrutiny review not found")
-    row.status="COMPLETED"; row.completed_at=datetime.now(timezone.utc); row.decision="COMPLETE"; audit(db,"SCRUTINY_COMPLETED",user.id,"APPLICATION",id); db.commit(); return {"success":True,"data":public(row)}
+    if not row:
+        row = ScrutinyReview(application_id=id, officer_id=user.id, status="IN_PROGRESS")
+        db.add(row)
+        db.flush()
+    row.status="COMPLETED"; row.completed_at=datetime.now(timezone.utc); row.decision="COMPLETE"
+    move_application_status(db, application, "ELIGIBILITY_CONFIRMED", user.id, "Scrutiny completed", "SCRUTINY_COMPLETED")
+    db.commit()
+    return {"success":True,"data":public(row)}
 @router.post("/scrutiny/applications/{id}/return")
-def return_scrutiny(id:str,db:Session=Depends(get_db),user=role_guard("SCRUTINY_OFFICER")): return complete_scrutiny(id,db,user)
+def return_scrutiny(id:str,db:Session=Depends(get_db),user=role_guard("SCRUTINY_OFFICER")):
+    application = get_or_404(db, Application, id)
+    if application.status not in ("INSTITUTION_VERIFIED", "RESUBMITTED"):
+        raise InvalidTransition(f"Scrutiny cannot be returned from {application.status}")
+    row=db.scalar(select(ScrutinyReview).where(ScrutinyReview.application_id==id,ScrutinyReview.officer_id==user.id).order_by(ScrutinyReview.created_at.desc()))
+    if not row:
+        row = ScrutinyReview(application_id=id, officer_id=user.id, status="IN_PROGRESS")
+        db.add(row)
+        db.flush()
+    row.status="RETURNED"; row.completed_at=datetime.now(timezone.utc); row.decision="RETURN"
+    move_application_status(db, application, "DEFICIENCY_RAISED", user.id, "Scrutiny returned for clarification", "SCRUTINY_RETURNED")
+    db.commit()
+    return {"success":True,"data":public(row)}
+@router.post("/scrutiny/applications/{id}/reject")
+def reject_scrutiny(id:str,body:ScrutinyNoteIn,db:Session=Depends(get_db),user=role_guard("SCRUTINY_OFFICER")):
+    application = get_or_404(db, Application, id)
+    if application.status not in ("INSTITUTION_VERIFIED", "RESUBMITTED"):
+        raise InvalidTransition(f"Scrutiny cannot be rejected from {application.status}")
+    row=db.scalar(select(ScrutinyReview).where(ScrutinyReview.application_id==id,ScrutinyReview.officer_id==user.id).order_by(ScrutinyReview.created_at.desc()))
+    if not row:
+        row = ScrutinyReview(application_id=id, officer_id=user.id, status="IN_PROGRESS")
+        db.add(row)
+        db.flush()
+    row.status="REJECTED"; row.completed_at=datetime.now(timezone.utc); row.decision="REJECT"; row.notes=(row.notes or "")+"\n"+body.note
+    move_application_status(db, application, "REJECTED", user.id, body.note or "Rejected during scrutiny", "SCRUTINY_REJECTED")
+    db.commit()
+    return {"success":True,"data":public(row)}
 @router.post("/institutions/applications/{id}/verify")
 def verify_institution_application(id:str,body:VerificationIn,db:Session=Depends(get_db),user=role_guard("INSTITUTION_NODAL_OFFICER","VERIFICATION_OFFICER")):
-    application=get_or_404(db,Application,id)
+    application=application_for_actor(db,id,user)
     institution_id=body.fields.get("institution_id")
     if not institution_id:
         link = db.scalar(select(InstitutionUser).where(InstitutionUser.user_id==user.id))
         if link:
             institution_id = link.institution_id
         else:
-            first_inst = db.scalar(select(Institution))
-            institution_id = first_inst.id if first_inst else "INST-DEFAULT"
-    row=InstitutionVerificationRecord(application_id=id,institution_id=institution_id,verifier_id=user.id,result=body.result,fields=body.fields,note=body.note); db.add(row); audit(db,"INSTITUTION_VERIFICATION",user.id,"APPLICATION",id,{"result":body.result}); db.commit(); return {"success":True,"data":public(row)}
+            raise Forbidden("INSTITUTION_SCOPE_REQUIRED: Officer is not linked to an institution")
+    if user.role == "INSTITUTION_NODAL_OFFICER":
+        app_inst = (application.answers or {}).get("institution_id") or (application.answers or {}).get("institution")
+        if app_inst and str(app_inst) != str(institution_id):
+            raise Forbidden("Application does not belong to your institution")
+    row=InstitutionVerificationRecord(application_id=id,institution_id=institution_id,verifier_id=user.id,result=body.result,fields=body.fields,note=body.note)
+    db.add(row)
+    if body.result == "VERIFIED":
+        move_application_status(db, application, "INSTITUTION_VERIFIED", user.id, "Institution verified", "INSTITUTION_VERIFICATION")
+    elif body.result in ("REJECTED", "NEED_CLARIFICATION"):
+        target = "DEFICIENCY_RAISED" if body.result == "NEED_CLARIFICATION" else "REJECTED"
+        move_application_status(db, application, target, user.id, body.note or f"Institution result: {body.result}", "INSTITUTION_VERIFICATION")
+    audit(db,"INSTITUTION_VERIFICATION",user.id,"APPLICATION",id,{"result":body.result})
+    db.commit()
+    return {"success":True,"data":public(row)}
 @router.post("/institutions/applications/{id}/request-clarification")
 def request_institution_clarification(id:str,body:VerificationIn,db:Session=Depends(get_db),user=role_guard("INSTITUTION_NODAL_OFFICER","VERIFICATION_OFFICER")):
     body.result="NEED_CLARIFICATION"; return verify_institution_application(id,body,db,user)

@@ -31,12 +31,6 @@ export function deleteHoliday(id: string) {
   return api.delete(`/admin/holidays/${id}`);
 }
 
-// ── Approvals Queue ──────────────────────────────────────────────────────────
-
-export function getApprovalsQueue(params?: Record<string, string | number | boolean | undefined>) {
-  return api.get("/approvals/queue", { params });
-}
-
 // ── Notification Templates ──────────────────────────────────────────────────
 
 export function listNotificationTemplates() {
@@ -46,9 +40,9 @@ export function listNotificationTemplates() {
 export function createNotificationTemplate(data: {
   code: string;
   channel: string;
-  subject?: string;
+  subject?: string | undefined;
   body: string;
-  published?: boolean;
+  published?: boolean | undefined;
 }) {
   return api.post("/notification-templates", data);
 }

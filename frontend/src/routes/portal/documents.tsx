@@ -167,7 +167,7 @@ function MyDocuments() {
     <div>
       <PageHeader
         title="Document Locker"
-        desc="Upload and manage your persistent certificates, marksheets, and identity proofs. Documents stored here are automatically attached to any scheme applications you submit."
+        desc="Upload and manage your persistent certificates, marksheets, and identity proofs. Upload specific documents to each application against that scheme's checklist."
         action={
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => setShowUpload(!showUpload)}>
@@ -312,8 +312,8 @@ function MyDocuments() {
         <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
         <p className="text-xs text-muted-foreground">
           <strong>Master FRD Compliance:</strong> Documents in your locker are secured with SHA-256
-          integrity hashing and stored encrypted in cloud storage. Whenever you apply to any MoTA
-          scheme, required documents are automatically linked to save you from re-uploading.
+          integrity hashing and stored encrypted in cloud storage. Upload required documents against
+          each scheme application's checklist before submitting.
         </p>
       </div>
 

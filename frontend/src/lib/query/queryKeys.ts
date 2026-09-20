@@ -25,6 +25,7 @@ export const queryKeys = {
     detail: (id: string) => ["schemeVersions", id] as const,
     form: (id: string) => ["schemeVersions", id, "form"] as const,
     rules: (id: string) => ["schemeVersions", id, "rules"] as const,
+    documents: (id: string) => ["schemeVersions", id, "documents"] as const,
   },
 
   // ── Applications ────────────────────────────────────────────────────────────
@@ -95,6 +96,8 @@ export const queryKeys = {
   notifications: {
     all: ["notifications"] as const,
     list: (params?: Record<string, unknown>) => ["notifications", params] as const,
+    sent: (params?: Record<string, unknown>) => ["notifications", "sent", params] as const,
+    templates: ["notification-templates"] as const,
   },
 
   // ── Grievances ──────────────────────────────────────────────────────────────

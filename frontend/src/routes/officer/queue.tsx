@@ -2,10 +2,9 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeader, StatusBadge, Priority, Sla, KpiCard } from "@/components/mota/bits";
 import { DataTable, type Column } from "@/components/mota/DataTable";
 import { FilterBar, type FilterBarDef } from "@/components/mota/FilterBar";
-import { useApplicationsQuery } from "@/hooks/api/useApplications";
-
-type Row = Record<string, unknown>;
-import { useState } from "react";
+import { useOfficerQueueQuery } from "@/hooks/api/useQueues";
+import type { QueueRow } from "@/api/queue";
+import { useMemo, useState } from "react";
 import { AlertTriangle, ClipboardList, Clock, ShieldCheck } from "lucide-react";
 
 export const Route = createFileRoute("/officer/queue")({
@@ -15,42 +14,18 @@ export const Route = createFileRoute("/officer/queue")({
   component: WorkQueue,
 });
 
-const filters: FilterBarDef<Row>[] = [
-  {
-    key: "scheme",
-    label: "Scheme",
-    placeholder: "All schemes",
-    options: [
-      { value: "NFST", label: "NFST" },
-      { value: "NOS", label: "NOS" },
-      { value: "TCE", label: "Top Class Education" },
-      { value: "PMS", label: "PMS" },
-    ],
-  },
-  {
-    key: "stage",
-    label: "Stage",
-    placeholder: "All stages",
-    options: [
-      { value: "Documents", label: "Documents" },
-      { value: "Institution", label: "Institution verification" },
-      { value: "Committee", label: "Committee" },
-      { value: "Approval", label: "Approval" },
-    ],
-  },
-  {
-    key: "priority",
-    label: "Priority",
-    placeholder: "All priorities",
-    options: [
-      { value: "High", label: "High" },
-      { value: "Medium", label: "Medium" },
-      { value: "Low", label: "Low" },
-    ],
-  },
-];
+const ACTION_STATUSES = new Set([
+  "SUBMITTED",
+  "INSTITUTION_VERIFIED",
+  "RESUBMITTED",
+  "DEFICIENCY_RAISED",
+  "APPROVAL_HOLD",
+]);
 
-const columns: Column<Row>[] = [
+const OVER_SLA_DAYS = 14;
+const ESCALATION_DAYS = 21;
+
+const columns: Column<QueueRow>[] = [
   {
     key: "priority",
     header: "Priority",
@@ -58,22 +33,22 @@ const columns: Column<Row>[] = [
     cell: (r) => <Priority level={r.priority} />,
   },
   {
-    key: "id",
+    key: "application_number",
     header: "Application",
-    sortValue: (r) => r.id,
-    cell: (r) => <span className="font-semibold">{r.id}</span>,
+    sortValue: (r) => r.application_number ?? r.id,
+    cell: (r) => <span className="font-semibold">{r.application_number ?? r.id}</span>,
   },
   {
     key: "applicant",
     header: "Applicant",
-    sortValue: (r) => r.applicant,
-    cell: (r) => <span className="font-medium">{r.applicant}</span>,
+    sortValue: (r) => r.applicant ?? "",
+    cell: (r) => <span className="font-medium">{r.applicant ?? "—"}</span>,
   },
   {
     key: "scheme",
     header: "Scheme",
-    sortValue: (r) => r.scheme,
-    cell: (r) => <span className="text-muted-foreground">{r.scheme}</span>,
+    sortValue: (r) => r.scheme_code ?? r.scheme ?? "",
+    cell: (r) => <span className="text-muted-foreground">{r.scheme ?? "—"}</span>,
     hideBelowMd: true,
   },
   {
@@ -83,35 +58,60 @@ const columns: Column<Row>[] = [
     cell: (r) => <StatusBadge status={r.stage} />,
   },
   {
-    key: "score",
-    header: "Score",
-    sortValue: (r) => r.score,
-    cell: (r) => <span className="font-semibold text-primary">{r.score}</span>,
-    hideBelowLg: true,
-  },
-  {
-    key: "sla",
+    key: "sla_days",
     header: "SLA",
-    sortValue: (r) => r.sla,
-    cell: (r) => <Sla days={r.sla} />,
+    sortValue: (r) => r.sla_days,
+    cell: (r) => <Sla days={r.sla_days} />,
   },
 ];
 
 function WorkQueue() {
   const navigate = useNavigate();
   const [filtersValue, setFiltersValue] = useState<Record<string, string>>({});
-  const { data: officerQueue2 = [], isLoading, isError } = useApplicationsQuery();
+  const { data: queue = [], isLoading, isError } = useOfficerQueueQuery();
 
-  const filtered = (officerQueue2 as Row[]).filter((r) => {
-    if (filtersValue.scheme && r.scheme !== filtersValue.scheme) return false;
-    if (filtersValue.stage && r.stage !== filtersValue.stage) return false;
-    if (filtersValue.priority && r.priority !== filtersValue.priority) return false;
+  const schemeOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const row of queue) {
+      const value = row.scheme_code ?? row.scheme;
+      if (value && !seen.has(value)) seen.set(value, row.scheme ?? value);
+    }
+    return [...seen.entries()].map(([value, label]) => ({ value, label }));
+  }, [queue]);
+
+  const stageOptions = useMemo(() => {
+    const seen = new Set<string>();
+    for (const row of queue) seen.add(row.stage);
+    return [...seen].map((value) => ({ value, label: value.replaceAll("_", " ") }));
+  }, [queue]);
+
+  const filters: FilterBarDef<QueueRow>[] = [
+    { key: "scheme", label: "Scheme", placeholder: "All schemes", options: schemeOptions },
+    { key: "stage", label: "Stage", placeholder: "All stages", options: stageOptions },
+    {
+      key: "priority",
+      label: "Priority",
+      placeholder: "All priorities",
+      options: [
+        { value: "High", label: "High" },
+        { value: "Medium", label: "Medium" },
+        { value: "Low", label: "Low" },
+      ],
+    },
+  ];
+
+  const filtered = queue.filter((r) => {
+    if (filtersValue["scheme"] && (r.scheme_code ?? r.scheme) !== filtersValue["scheme"])
+      return false;
+    if (filtersValue["stage"] && r.stage !== filtersValue["stage"]) return false;
+    if (filtersValue["priority"] && r.priority !== filtersValue["priority"]) return false;
     return true;
   });
 
-  const total = 41;
-  const actionRequired = 1;
-  const overSla = 7;
+  const total = queue.length;
+  const actionRequired = queue.filter((r) => ACTION_STATUSES.has(r.status)).length;
+  const overSla = queue.filter((r) => r.sla_days > OVER_SLA_DAYS).length;
+  const escalation = queue.filter((r) => r.sla_days >= ESCALATION_DAYS).length;
 
   return (
     <div>
@@ -124,7 +124,7 @@ function WorkQueue() {
         <KpiCard label="In queue" value={String(total)} icon={ClipboardList} />
         <KpiCard label="Action required" value={String(actionRequired)} icon={AlertTriangle} />
         <KpiCard label="Over SLA" value={String(overSla)} icon={Clock} />
-        <KpiCard label="Escalation eligible" value="7" icon={ShieldCheck} />
+        <KpiCard label="Escalation eligible" value={String(escalation)} icon={ShieldCheck} />
       </div>
 
       <div className="mb-4">
@@ -150,14 +150,15 @@ function WorkQueue() {
           columns={columns}
           getRowKey={(r) => r.id}
           searchPlaceholder="Search application, applicant or scheme"
-          searchKeys={(r) => `${r.id} ${r.applicant} ${r.scheme} ${r.state}`}
+          searchKeys={(r) =>
+            `${r.application_number ?? ""} ${r.applicant ?? ""} ${r.scheme ?? ""} ${r.stage}`
+          }
           onRowClick={(r) => navigate({ to: "/officer/applications/$id", params: { id: r.id } })}
         />
       )}
 
       <p className="mt-3 text-xs text-muted-foreground">
-        Showing {filtered.length} items from your currently loaded queue. The remaining items load
-        as you advance the page or adjust filters.
+        Showing {filtered.length} of {total} applications in your queue.
       </p>
     </div>
   );

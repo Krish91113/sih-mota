@@ -24,11 +24,13 @@ export function PortalLayout({
   nav,
   portalName,
   user,
+  badgeCounts,
   children,
 }: {
   nav: NavSection[];
   portalName: string;
   user: PortalUser;
+  badgeCounts?: Record<string, number>;
   children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -53,6 +55,7 @@ export function PortalLayout({
                 ? location.pathname === item.to
                 : location.pathname === item.to || location.pathname.startsWith(item.to + "/");
               const Icon = item.icon;
+              const badge = badgeCounts?.[item.to] ?? item.badge;
               return (
                 <li key={item.to}>
                   <Link
@@ -67,7 +70,7 @@ export function PortalLayout({
                   >
                     <Icon className="size-4 shrink-0" aria-hidden />
                     <span className="flex-1 truncate">{item.label}</span>
-                    {typeof item.badge === "number" && item.badge > 0 ? (
+                    {typeof badge === "number" && badge > 0 ? (
                       <span
                         className={cn(
                           "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
@@ -76,7 +79,7 @@ export function PortalLayout({
                             : "bg-primary/20 text-primary",
                         )}
                       >
-                        {item.badge}
+                        {badge}
                       </span>
                     ) : null}
                   </Link>

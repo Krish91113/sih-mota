@@ -138,7 +138,13 @@ export interface ApplicantProfileData {
     address?: Record<string, string>;
     family?: Record<string, string>;
     income?: { annual?: string; source?: string; certificateAvailable?: boolean };
-    academic?: Array<{ level: string; board?: string; university?: string; year: string; marks: string }>;
+    academic?: Array<{
+      level: string;
+      board?: string;
+      university?: string;
+      year: string;
+      marks: string;
+    }>;
     research?: Record<string, unknown>;
     bank?: Record<string, string>;
     [key: string]: unknown;

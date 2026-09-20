@@ -80,6 +80,18 @@ def resolve_tie(id: str, body: TieIn, db: Session = Depends(get_db), user=Depend
     candidates = db.scalars(select(SelectionCandidate).where(SelectionCandidate.round_id == id, SelectionCandidate.id.in_(body.candidate_ids))).all()
     if len(candidates) != len(set(body.candidate_ids)):
         raise Conflict("Tie contains a candidate outside this selection round")
+    if user.role == "SELECTION_COMMITTEE_MEMBER":
+        from app.domain.relational_models import ApplicationAssignment
+        for candidate in candidates:
+            assigned = db.scalar(
+                select(ApplicationAssignment.id).where(
+                    ApplicationAssignment.application_id == candidate.application_id,
+                    ApplicationAssignment.assignee_id == user.id,
+                    ApplicationAssignment.assignment_type == "SELECTION_COMMITTEE",
+                )
+            )
+            if not assigned:
+                raise Forbidden("Tie contains a candidate outside the committee member's assignment scope")
     existing = db.scalar(select(SelectionTieResolution).where(SelectionTieResolution.round_id == id))
     if existing:
         raise Conflict("Selection round already has a tie resolution")
@@ -96,6 +108,17 @@ def request_correction(id: str, body: CorrectionIn, db: Session = Depends(get_db
     round_ = get(db, SelectionRound, candidate.round_id)
     if not round_.finalized_at:
         raise Conflict("Correction workflow applies only after finalization")
+    if user.role == "SELECTION_COMMITTEE_MEMBER":
+        from app.domain.relational_models import ApplicationAssignment
+        assigned = db.scalar(
+            select(ApplicationAssignment.id).where(
+                ApplicationAssignment.application_id == candidate.application_id,
+                ApplicationAssignment.assignee_id == user.id,
+                ApplicationAssignment.assignment_type == "SELECTION_COMMITTEE",
+            )
+        )
+        if not assigned:
+            raise Forbidden("Candidate is outside the committee member's assignment scope")
     if body.old_value.get("total_score") is not None and Decimal(str(body.old_value["total_score"])) != Decimal(str(candidate.total_score or 0)):
         raise Conflict("Correction old value does not match the finalized candidate")
     row = SelectionCorrection(candidate_id=id, requested_by=user.id, old_value=body.old_value, new_value=body.new_value, reason=body.reason)
@@ -131,7 +154,7 @@ def approve_correction(id: str, db: Session = Depends(get_db), user=Depends(requ
 
 @router.post("/applications/{id}/approval-hold", status_code=201)
 def approval_hold(id: str, body: HoldIn, db: Session = Depends(get_db), user=Depends(require_roles("APPROVING_AUTHORITY")), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
-    get(db, Application, id)
+    application = get(db, Application, id)
     pending = db.scalar(select(Approval).where(Approval.application_id == id, Approval.decision.in_(["PENDING", "HOLD"])))
     if pending:
         if pending.decision == "HOLD" and pending.approver_id == user.id and pending.note == body.reason:
@@ -139,9 +162,14 @@ def approval_hold(id: str, body: HoldIn, db: Session = Depends(get_db), user=Dep
         raise Conflict("Application already has an active approval decision")
     row = Approval(application_id=id, approver_id=user.id, decision="HOLD", note=body.reason, packet_snapshot={})
     db.add(row)
+    old_status = application.status
+    application.status = "APPROVAL_HOLD"
+    application.version += 1
+    from app.domain.relational_models import ApplicationStatusHistory
+    db.add(ApplicationStatusHistory(application_id=id, from_status=old_status, to_status=application.status, actor_id=user.id, reason=body.reason))
     audit(db, "APPROVAL_HOLD", user.id, "APPLICATION", id, {"reason": body.reason})
     db.commit()
-    return {"success": True, "data": public(row)}
+    return {"success": True, "data": {**public(row), "application_status": application.status}}
 
 
 @router.post("/applications/{id}/approval-delegation", status_code=201)
@@ -193,22 +221,54 @@ def pay_installment(id: str, body: PaymentIn, db: Session = Depends(get_db), use
     installment = get(db, FinanceInstallment, id)
     if installment.status in {"PAID", "COMPLETED"}:
         raise Conflict("Installment has already been paid")
+    from app.integrations.finance_providers import get_finance_provider
     if Decimal(str(body.actual_amount)) > Decimal(str(installment.expected_amount)):
         raise Conflict("Payment exceeds installment amount")
-    installment.paid_amount = body.actual_amount
-    installment.paid_at = datetime.now(timezone.utc)
-    installment.status = "PAID" if Decimal(str(body.actual_amount)) == Decimal(str(installment.expected_amount)) else "PARTIALLY_PAID"
+    provider_result = get_finance_provider().disburse(
+        {
+            "installment_id": id,
+            "award_id": installment.award_id,
+            "amount": body.actual_amount,
+            "payment_reference": body.payment_reference,
+        }
+    )
     award = get(db, Award, installment.award_id)
-    record = FinanceRecord(award_id=award.id, record_type="INSTALLMENT_PAYMENT", amount=body.actual_amount, external_reference=body.payment_reference, provider="mock", status="RECORDED", data={"installment_id": id})
+    record = FinanceRecord(
+        award_id=award.id, record_type="INSTALLMENT_PAYMENT", amount=body.actual_amount,
+        external_reference=provider_result.provider_reference or body.payment_reference,
+        provider=provider_result.provider,
+    )
     db.add(record)
-    audit(db, "INSTALLMENT_PAID", user.id, "FINANCE_INSTALLMENT", id, {"amount": body.actual_amount, "payment_reference": body.payment_reference})
+    db.flush()
+    installment.paid_amount = body.actual_amount
+    nominal = Decimal(str(installment.expected_amount))
+    actual = Decimal(str(body.actual_amount))
+    if actual == nominal:
+        installment.status = "PAID"
+    elif actual < nominal:
+        installment.status = "PARTIALLY_PAID"
+    installment.paid_at = datetime.now(timezone.utc)
+    if actual != nominal:
+        exception = PaymentException(
+            finance_record_id=record.id,
+            expected_amount=float(nominal),
+            actual_amount=float(actual),
+            difference=float(actual - nominal),
+            reason="Disbursement does not match installment amount",
+        )
+        db.add(exception)
+    audit(db, "INSTALLMENT_PAID", user.id, "FINANCE_INSTALLMENT", id, {"amount": body.actual_amount, "payment_reference": body.payment_reference, "provider": provider_result.provider, "status": provider_result.status})
     db.commit()
-    return {"success": True, "data": public(installment)}
+    result = {**public(installment), "provider": provider_result.provider, "disbursement_status": provider_result.status, "payment_exception_raised": actual != nominal}
+    return {"success": True, "data": result}
 
 
 @router.post("/finance/records/{id}/exceptions", status_code=201)
 def create_payment_exception(id: str, body: ExceptionIn, db: Session = Depends(get_db), user=Depends(require_roles("FINANCE_OFFICER"))):
     get(db, FinanceRecord, id)
+    existing = db.scalar(select(PaymentException).where(PaymentException.finance_record_id == id, PaymentException.status == "OPEN"))
+    if existing:
+        raise Conflict("Finance record already has an open payment exception")
     difference = body.actual_amount - body.expected_amount
     row = PaymentException(finance_record_id=id, expected_amount=body.expected_amount, actual_amount=body.actual_amount, difference=difference, reason=body.reason)
     db.add(row)

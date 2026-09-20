@@ -9,9 +9,8 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useSchemesQuery } from "@/hooks/api/useSchemes";
+import { faqs as publicFaqs } from "@/content/publicContent";
 import hero from "@/assets/hero-students.jpg";
 import scholar from "@/assets/scholar.jpg";
 import {
@@ -81,29 +80,23 @@ const steps = [
   },
 ];
 
-const stats = [
-  { value: "6", label: "Scholarship & fellowship schemes" },
-  { value: "1.42 lakh", label: "Applications received this cycle" },
-  { value: "68,400", label: "Awards sanctioned" },
-  { value: "9,120", label: "Institutions onboarded" },
-];
-
 function Home() {
   const schemesQuery = useSchemesQuery();
   const schemes = (schemesQuery.data ?? []).map((scheme) => ({
     ...scheme,
-    type: String(scheme.type ?? "Scholarship"),
-    open: Boolean(scheme.open ?? scheme.active),
+    type: String(scheme["type"] ?? "Scholarship"),
+    open: Boolean(scheme["open"] ?? scheme["active"]),
     summary: String(
-      scheme.summary ??
-        scheme.description ??
+      scheme["summary"] ??
+        scheme["description"] ??
         "Scheme details are available in the application form.",
     ),
-    level: String(scheme.level ?? "Higher education"),
-    deadline: String(scheme.deadline ?? "To be announced"),
+    level: String(scheme["level"] ?? "Higher education"),
+    deadline: String(scheme["deadline"] ?? "To be announced"),
   }));
   const notices: { id: string; date: string; tag: string; title: string; body: string }[] = [];
-  const faqs: { q: string; a: string }[] = [];
+  const openSchemes = schemes.filter((s) => s.open);
+  const featured = openSchemes[0] ?? schemes[0];
   return (
     <PublicLayout>
       {/* Hero */}
@@ -129,12 +122,18 @@ function Home() {
               </Button>
             </div>
             <dl className="mt-10 grid max-w-lg grid-cols-3 gap-6 border-t pt-6">
-              {stats.slice(1).map((s) => (
-                <div key={s.label}>
-                  <dt className="font-display text-2xl">{s.value}</dt>
-                  <dd className="mt-1 text-xs text-muted-foreground">{s.label}</dd>
-                </div>
-              ))}
+              <div>
+                <dt className="font-display text-2xl">{schemes.length}</dt>
+                <dd className="mt-1 text-xs text-muted-foreground">Schemes listed</dd>
+              </div>
+              <div>
+                <dt className="font-display text-2xl">{openSchemes.length}</dt>
+                <dd className="mt-1 text-xs text-muted-foreground">Open for applications</dd>
+              </div>
+              <div>
+                <dt className="font-display text-2xl">6</dt>
+                <dd className="mt-1 text-xs text-muted-foreground">Steps from apply to award</dd>
+              </div>
             </dl>
           </div>
           <div className="relative">
@@ -146,12 +145,21 @@ function Home() {
               className="aspect-[5/4] w-full rounded-2xl border object-cover shadow-lift"
             />
             <div className="absolute -bottom-6 left-4 hidden max-w-xs rounded-xl border bg-card p-4 shadow-lift sm:block">
-              <p className="flex items-center gap-2 text-sm font-semibold">
-                <CalendarClock className="size-4 text-primary" aria-hidden /> NFST 2026-27 is open
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Applications close on 31 October 2026.
-              </p>
+              {featured ? (
+                <>
+                  <p className="flex items-center gap-2 text-sm font-semibold">
+                    <CalendarClock className="size-4 text-primary" aria-hidden /> {featured.name} is{" "}
+                    {featured.open ? "open" : "closed"}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Last date to apply: {featured.deadline}.
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Scheme windows will be announced here.
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -355,16 +363,30 @@ function Home() {
         <SectionHead
           center
           eyebrow="At a glance"
-          title="Scheme performance this academic cycle"
-          desc="Indicative figures shown for demonstration of the portal interface."
+          title="Schemes published on the portal"
+          desc="Live counts from the scheme catalogue."
         />
         <dl className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {stats.map((s) => (
-            <div key={s.label} className="rounded-xl border bg-card p-6 text-center shadow-card">
-              <dt className="font-display text-3xl text-primary">{s.value}</dt>
-              <dd className="mt-2 text-sm text-muted-foreground">{s.label}</dd>
-            </div>
-          ))}
+          <div className="rounded-xl border bg-card p-6 text-center shadow-card">
+            <dt className="font-display text-3xl text-primary">{schemes.length}</dt>
+            <dd className="mt-2 text-sm text-muted-foreground">Total schemes</dd>
+          </div>
+          <div className="rounded-xl border bg-card p-6 text-center shadow-card">
+            <dt className="font-display text-3xl text-primary">{openSchemes.length}</dt>
+            <dd className="mt-2 text-sm text-muted-foreground">Open for applications</dd>
+          </div>
+          <div className="rounded-xl border bg-card p-6 text-center shadow-card">
+            <dt className="font-display text-3xl text-primary">
+              {schemes.filter((s) => s.type === "Fellowship").length}
+            </dt>
+            <dd className="mt-2 text-sm text-muted-foreground">Fellowships</dd>
+          </div>
+          <div className="rounded-xl border bg-card p-6 text-center shadow-card">
+            <dt className="font-display text-3xl text-primary">
+              {schemes.filter((s) => s.type === "Scholarship").length}
+            </dt>
+            <dd className="mt-2 text-sm text-muted-foreground">Scholarships</dd>
+          </div>
         </dl>
       </section>
 
@@ -381,25 +403,21 @@ function Home() {
               deficiency raised against your submission.
             </p>
           </div>
-          <form
-            className="rounded-xl bg-card p-5 text-card-foreground"
-            onSubmit={(e) => e.preventDefault()}
-          >
-            <Label htmlFor="appno" className="text-sm">
-              Application number
-            </Label>
-            <Input id="appno" placeholder="APP-2026-004182" className="mt-2" />
-            <Label htmlFor="dob" className="mt-4 block text-sm">
-              Date of birth
-            </Label>
-            <Input id="dob" type="date" className="mt-2" />
-            <Button type="submit" className="mt-5 w-full">
-              <Search className="size-4" aria-hidden /> Track status
-            </Button>
-            <p className="mt-3 text-xs text-muted-foreground">
-              Registered applicants can also sign in to view full application history.
+          <div className="rounded-xl bg-card p-5 text-card-foreground">
+            <p className="text-sm font-medium">Sign in to track your application</p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Your application number, current stage, pending actions and any deficiency are shown
+              securely in your dashboard.
             </p>
-          </form>
+            <Button asChild className="mt-4 w-full">
+              <Link to="/login">
+                <Search className="size-4" aria-hidden /> Sign in to track
+              </Link>
+            </Button>
+            <Button asChild variant="outline" className="mt-2 w-full">
+              <Link to="/register">Create an account</Link>
+            </Button>
+          </div>
         </div>
       </section>
 
@@ -408,20 +426,14 @@ function Home() {
         <div className="shell max-w-3xl">
           <SectionHead center eyebrow="FAQs" title="Questions applicants ask most" />
           <Accordion type="single" collapsible className="rounded-xl border bg-card px-2">
-            {faqs.length === 0 ? (
-              <p className="p-4 text-sm text-muted-foreground">
-                FAQs will appear here when the content API is available.
-              </p>
-            ) : (
-              faqs.slice(0, 5).map((f, i) => (
-                <AccordionItem key={f.q} value={`f${i}`}>
-                  <AccordionTrigger className="px-4 text-left text-base">{f.q}</AccordionTrigger>
-                  <AccordionContent className="px-4 text-sm text-muted-foreground">
-                    {f.a}
-                  </AccordionContent>
-                </AccordionItem>
-              ))
-            )}
+            {publicFaqs.slice(0, 5).map((f, i) => (
+              <AccordionItem key={f.q} value={`f${i}`}>
+                <AccordionTrigger className="px-4 text-left text-base">{f.q}</AccordionTrigger>
+                <AccordionContent className="px-4 text-sm text-muted-foreground">
+                  {f.a}
+                </AccordionContent>
+              </AccordionItem>
+            ))}
           </Accordion>
           <div className="mt-6 text-center">
             <Button asChild variant="outline">

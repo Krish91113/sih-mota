@@ -7,31 +7,7 @@ import {
   useFinanceExceptionsQuery,
   useFinanceReconciliationQuery,
 } from "@/hooks/api/useFinance";
-import { ArrowRight, Banknote, Landmark, ShieldAlert, Wallet, CheckCircle2 } from "lucide-react";
-
-interface AwardSummaryItem {
-  id: string;
-  scheme?: string;
-  scheme_name?: string;
-  amount?: number | string;
-  status?: string;
-  external_reference?: string;
-  batch?: string;
-  applicant_name?: string;
-  applicant?: string;
-  created_at?: string;
-}
-
-interface FinanceExceptionSummaryItem {
-  id: string;
-  status?: string;
-}
-
-interface ReconciliationSummaryItem {
-  id: string;
-  provider?: string;
-  amount?: number | string;
-}
+import { ArrowRight, Banknote, Landmark, ShieldAlert, Wallet } from "lucide-react";
 
 export const Route = createFileRoute("/finance/")({
   head: () => ({
@@ -47,48 +23,14 @@ function FinanceDashboard() {
 
   const isLoading =
     awardsQuery.isLoading || exceptionsQuery.isLoading || reconciliationQuery.isLoading;
-  const isError = awardsQuery.isError && exceptionsQuery.isError;
+  const isError = awardsQuery.isError || exceptionsQuery.isError || reconciliationQuery.isError;
 
-  const rawAwards: AwardSummaryItem[] =
-    (awardsQuery.data as { data?: AwardSummaryItem[] })?.data ||
-    (Array.isArray(awardsQuery.data) ? (awardsQuery.data as AwardSummaryItem[]) : []) ||
-    [];
-  const rawExceptions: FinanceExceptionSummaryItem[] =
-    (exceptionsQuery.data as { data?: FinanceExceptionSummaryItem[] })?.data ||
-    (Array.isArray(exceptionsQuery.data)
-      ? (exceptionsQuery.data as FinanceExceptionSummaryItem[])
-      : []) ||
-    [];
-  const rawReconciliation: ReconciliationSummaryItem[] =
-    (reconciliationQuery.data as { data?: ReconciliationSummaryItem[] })?.data ||
-    (Array.isArray(reconciliationQuery.data)
-      ? (reconciliationQuery.data as ReconciliationSummaryItem[])
-      : []) ||
-    [];
+  const awards = awardsQuery.data ?? [];
+  const exceptions = exceptionsQuery.data ?? [];
+  const reconciliation = reconciliationQuery.data ?? [];
 
-  const openExceptions = rawExceptions.filter(
-    (e: FinanceExceptionSummaryItem) => e.status !== "RESOLVED",
-  ).length;
-  const totalSanctions = rawAwards.length;
-  const totalAmount = rawAwards.reduce((sum: number, a: AwardSummaryItem) => {
-    const val =
-      typeof a.amount === "number"
-        ? a.amount
-        : parseFloat(String(a.amount).replace(/[^0-9.-]+/g, "")) || 0;
-    return sum + val;
-  }, 0);
-
-  const recentDisbursement = rawAwards[0]
-    ? {
-        id: String(rawAwards[0].id),
-        batch: String(rawAwards[0].external_reference || rawAwards[0].batch || "Batch-1"),
-        applicant: String(rawAwards[0].applicant_name || rawAwards[0].applicant || "Beneficiary"),
-        amount: rawAwards[0].amount ? `₹${Number(rawAwards[0].amount).toLocaleString()}` : "—",
-        date: rawAwards[0].created_at
-          ? new Date(rawAwards[0].created_at).toLocaleDateString()
-          : "Recent",
-      }
-    : null;
+  const openExceptions = exceptions.filter((e) => e.status !== "RESOLVED").length;
+  const totalAmount = awards.reduce((sum, a) => sum + (a.amount ?? 0), 0);
 
   if (isLoading)
     return <p className="py-8 text-sm text-muted-foreground">Loading finance dashboard…</p>;
@@ -99,19 +41,19 @@ function FinanceDashboard() {
     <div>
       <PageHeader
         title="Finance dashboard"
-        desc="Sanctions, disbursement batches and reconciliation for financial year 2026-27."
+        desc="Sanctions, disbursement batches and reconciliation across all schemes."
       />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Sanctions count" value={String(totalSanctions)} icon={Landmark} />
+        <KpiCard label="Awards" value={String(awards.length)} icon={Landmark} />
         <KpiCard
-          label="Total sanction value"
+          label="Total award value"
           value={totalAmount > 0 ? `₹${totalAmount.toLocaleString()}` : "—"}
           icon={Banknote}
         />
         <KpiCard
           label="Reconciliation records"
-          value={String(rawReconciliation.length)}
+          value={String(reconciliation.length)}
           icon={Wallet}
         />
         <KpiCard label="Open exceptions" value={String(openExceptions)} icon={ShieldAlert} />
@@ -122,8 +64,8 @@ function FinanceDashboard() {
           <CardHeader className="flex-row items-center justify-between border-b border-dashed pb-3">
             <CardTitle className="text-base">Active sanctions & awards</CardTitle>
             <Button asChild variant="ghost" size="sm" className="text-primary">
-              <Link to="/finance/sanctions">
-                All sanctions <ArrowRight className="size-4" aria-hidden />
+              <Link to="/finance/awards">
+                All awards <ArrowRight className="size-4" aria-hidden />
               </Link>
             </Button>
           </CardHeader>
@@ -132,14 +74,14 @@ function FinanceDashboard() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/60 text-left text-xs text-muted-foreground">
-                    <th className="px-4 py-3 font-semibold">Sanction ref</th>
-                    <th className="px-4 py-3 font-semibold">Scheme</th>
+                    <th className="px-4 py-3 font-semibold">Award ref</th>
+                    <th className="px-4 py-3 font-semibold">Application</th>
                     <th className="px-4 py-3 font-semibold">Amount</th>
                     <th className="px-4 py-3 font-semibold">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rawAwards.length === 0 ? (
+                  {awards.length === 0 ? (
                     <tr>
                       <td
                         colSpan={4}
@@ -149,17 +91,17 @@ function FinanceDashboard() {
                       </td>
                     </tr>
                   ) : null}
-                  {rawAwards.slice(0, 5).map((s: AwardSummaryItem) => (
-                    <tr key={s.id} className="border-b last:border-0">
-                      <td className="px-4 py-3 font-semibold">{s.id}</td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {s.scheme || s.scheme_name || "Scheme"}
+                  {awards.slice(0, 5).map((a) => (
+                    <tr key={a.id} className="border-b last:border-0">
+                      <td className="px-4 py-3 font-semibold">{a.id}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                        {a.application_id}
                       </td>
                       <td className="px-4 py-3 font-medium">
-                        ₹{Number(s.amount || 0).toLocaleString()}
+                        {typeof a.amount === "number" ? `₹${a.amount.toLocaleString()}` : "—"}
                       </td>
                       <td className="px-4 py-3">
-                        <StatusBadge status={s.status || "Sanctioned"} />
+                        <StatusBadge status={a.status} />
                       </td>
                     </tr>
                   ))}
@@ -175,27 +117,35 @@ function FinanceDashboard() {
               <CardTitle className="text-base">Latest award</CardTitle>
             </CardHeader>
             <CardContent className="p-5 text-sm">
-              {recentDisbursement ? (
+              {awards[0] ? (
                 <dl className="space-y-2">
                   <div className="flex justify-between gap-3">
                     <dt className="text-muted-foreground">Ref</dt>
-                    <dd className="font-medium">{recentDisbursement.id}</dd>
+                    <dd className="font-medium">{awards[0].id}</dd>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <dt className="text-muted-foreground">Beneficiary</dt>
-                    <dd className="font-medium">{recentDisbursement.applicant}</dd>
+                    <dt className="text-muted-foreground">Application</dt>
+                    <dd className="font-mono text-xs">{awards[0].application_id}</dd>
                   </div>
                   <div className="flex justify-between gap-3">
                     <dt className="text-muted-foreground">Amount</dt>
-                    <dd className="font-medium">{recentDisbursement.amount}</dd>
+                    <dd className="font-medium">
+                      {typeof awards[0].amount === "number"
+                        ? `₹${awards[0].amount.toLocaleString()}`
+                        : "—"}
+                    </dd>
                   </div>
                   <div className="flex justify-between gap-3">
                     <dt className="text-muted-foreground">Date</dt>
-                    <dd className="text-muted-foreground">{recentDisbursement.date}</dd>
+                    <dd className="text-muted-foreground">
+                      {awards[0].award_date
+                        ? new Date(String(awards[0].award_date)).toLocaleDateString()
+                        : "—"}
+                    </dd>
                   </div>
                 </dl>
               ) : (
-                <p className="text-xs text-muted-foreground">No recent disbursements.</p>
+                <p className="text-xs text-muted-foreground">No awards recorded yet.</p>
               )}
             </CardContent>
           </Card>
@@ -231,24 +181,23 @@ function FinanceDashboard() {
           </Button>
         </CardHeader>
         <CardContent className="p-4">
-          {rawReconciliation.length === 0 ? (
+          {reconciliation.length === 0 ? (
             <p className="text-sm text-muted-foreground">No reconciliation entries recorded yet.</p>
           ) : (
             <div className="space-y-2">
-              {rawReconciliation.slice(0, 3).map((r: ReconciliationSummaryItem) => (
+              {reconciliation.slice(0, 3).map((r) => (
                 <div
                   key={r.id}
                   className="flex items-center justify-between border-b pb-2 last:border-0 text-sm"
                 >
                   <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-4 text-leaf" />
                     <span>{r.id}</span>
-                    <span className="text-xs text-muted-foreground">
-                      Provider: {r.provider || "PFMS"}
-                    </span>
+                    <StatusBadge status={r.status} />
                   </div>
                   <span className="font-semibold text-primary">
-                    ₹{Number(r.amount || 0).toLocaleString()}
+                    {typeof r.actual_amount === "number"
+                      ? `₹${r.actual_amount.toLocaleString()}`
+                      : "—"}
                   </span>
                 </div>
               ))}

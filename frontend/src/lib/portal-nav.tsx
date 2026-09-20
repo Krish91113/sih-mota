@@ -58,7 +58,7 @@ export const applicantNav: NavSection[] = [
       { label: "Applications", to: "/portal/applications", icon: FolderKanban },
       { label: "New Application", to: "/portal/applications/new", icon: FilePlus2 },
       { label: "Documents", to: "/portal/documents", icon: FolderOpen },
-      { label: "Deficiencies", to: "/portal/deficiencies", icon: AlertTriangle, badge: 2 },
+      { label: "Deficiencies", to: "/portal/deficiencies", icon: AlertTriangle },
       { label: "Awards", to: "/portal/awards", icon: BadgeCheck },
     ],
   },
@@ -76,8 +76,8 @@ export const institutionNav: NavSection[] = [
     items: [
       { label: "Dashboard", to: "/institution", icon: LayoutDashboard, end: true },
       { label: "Assigned Applications", to: "/institution/applications", icon: FolderKanban },
-      { label: "Verification Queue", to: "/institution/verifications", icon: ListChecks, badge: 7 },
-      { label: "Clarifications", to: "/institution/clarifications", icon: ShieldCheck, badge: 3 },
+      { label: "Verification Queue", to: "/institution/verifications", icon: ListChecks },
+      { label: "Clarifications", to: "/institution/clarifications", icon: ShieldCheck },
     ],
   },
   {
@@ -90,10 +90,10 @@ export const officerNav: NavSection[] = [
   {
     items: [
       { label: "Dashboard", to: "/officer", icon: LayoutDashboard, end: true },
-      { label: "Work Queue", to: "/officer/queue", icon: ClipboardList, badge: 41 },
-      { label: "Deficiencies", to: "/officer/deficiencies", icon: AlertTriangle, badge: 16 },
-      { label: "Grievances", to: "/officer/grievances", icon: LifeBuoy, badge: 5 },
-      { label: "Clarifications", to: "/officer/clarifications", icon: ShieldCheck, badge: 3 },
+      { label: "Work Queue", to: "/officer/queue", icon: ClipboardList },
+      { label: "Deficiencies", to: "/officer/deficiencies", icon: AlertTriangle },
+      { label: "Grievances", to: "/officer/grievances", icon: LifeBuoy },
+      { label: "Clarifications", to: "/officer/clarifications", icon: ShieldCheck },
       { label: "Notifications", to: "/officer/notifications", icon: Bell },
     ],
   },
@@ -103,7 +103,7 @@ export const committeeNav: NavSection[] = [
   {
     items: [
       { label: "Dashboard", to: "/committee", icon: LayoutDashboard, end: true },
-      { label: "Candidates", to: "/committee/candidates", icon: Users, badge: 64 },
+      { label: "Candidates", to: "/committee/candidates", icon: Users },
     ],
   },
 ];
@@ -112,7 +112,7 @@ export const approvalNav: NavSection[] = [
   {
     items: [
       { label: "Dashboard", to: "/approval", icon: LayoutDashboard, end: true },
-      { label: "Approval Queue", to: "/approval/queue", icon: Scale, badge: 28 },
+      { label: "Approval Queue", to: "/approval/queue", icon: Scale },
     ],
   },
 ];
@@ -125,7 +125,7 @@ export const financeNav: NavSection[] = [
       { label: "Sanctions", to: "/finance/sanctions", icon: Landmark },
       { label: "Disbursements", to: "/finance/disbursements", icon: Banknote },
       { label: "Reconciliation", to: "/finance/reconciliation", icon: ArrowLeftRight },
-      { label: "Exceptions", to: "/finance/exceptions", icon: ShieldAlert, badge: 4 },
+      { label: "Exceptions", to: "/finance/exceptions", icon: ShieldAlert },
     ],
   },
 ];

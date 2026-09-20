@@ -6,6 +6,9 @@ export interface Award {
   application_id: string;
   status: string;
   amount: number | null;
+  scheme_version_id?: string | null;
+  awarded_by?: string | null;
+  award_date?: string | null;
   [key: string]: unknown;
 }
 
@@ -23,6 +26,8 @@ export interface FinanceRecord {
   record_type: string;
   amount: number | null;
   status: string;
+  provider?: string | null;
+  external_reference?: string | null;
   [key: string]: unknown;
 }
 
@@ -66,15 +71,28 @@ export interface FinanceException {
   id: string;
   status: string;
   reason: string;
+  finance_record_id?: string | null;
+  award_id?: string | null;
+  expected_amount?: number | null;
+  amount?: number | null;
+  actual_amount?: number | null;
+  difference?: number | null;
+  resolved_at?: string | null;
   [key: string]: unknown;
 }
 
 export interface ReconciliationRecord {
   id: string;
+  award_id: string;
+  record_type: string;
+  amount: number | null;
   status: string;
-  expected_amount: number | null;
-  actual_amount: number | null;
-  difference: number | null;
+  provider?: string | null;
+  external_reference?: string | null;
+  expected_amount?: number | null;
+  actual_amount?: number | null;
+  difference?: number | null;
+  created_at?: string | null;
   [key: string]: unknown;
 }
 

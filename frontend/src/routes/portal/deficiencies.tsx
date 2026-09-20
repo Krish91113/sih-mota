@@ -97,7 +97,10 @@ function MyDeficiencies() {
         action={
           deficiencies[0]?.application ? (
             <Button asChild className="whitespace-nowrap">
-              <Link to="/portal/applications/$id/deficiency" params={{ id: deficiencies[0].application }}>
+              <Link
+                to="/portal/applications/$id/deficiency"
+                params={{ id: deficiencies[0].application }}
+              >
                 Resolve issues <ArrowRight className="size-4" aria-hidden />
               </Link>
             </Button>

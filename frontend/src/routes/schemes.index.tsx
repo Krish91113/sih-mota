@@ -36,17 +36,17 @@ function Schemes() {
   const schemes = schemesQuery.data ?? [];
   const schemeViews = schemes.map((scheme) => ({
     ...scheme,
-    type: String(scheme.type ?? "Scholarship"),
-    open: Boolean(scheme.open ?? scheme.active),
+    type: String(scheme["type"] ?? "Scholarship"),
+    open: Boolean(scheme["open"] ?? scheme["active"]),
     summary: String(
-      scheme.summary ??
-        scheme.description ??
+      scheme["summary"] ??
+        scheme["description"] ??
         "Scheme details are available in the application form.",
     ),
-    level: String(scheme.level ?? "Higher education"),
-    amount: String(scheme.amount ?? "See scheme guidelines"),
-    deadline: String(scheme.deadline ?? "To be announced"),
-    code: String(scheme.code ?? ""),
+    level: String(scheme["level"] ?? "Higher education"),
+    amount: String(scheme["amount"] ?? "See scheme guidelines"),
+    deadline: String(scheme["deadline"] ?? "To be announced"),
+    code: String(scheme["code"] ?? ""),
   }));
   const [tab, setTab] = useState("all");
 
@@ -67,7 +67,7 @@ function Schemes() {
     <PublicLayout>
       <PageBanner
         title="Scholarship and fellowship schemes"
-        desc="Six central schemes support Scheduled Tribe students across school, college, research and overseas study."
+        desc="Central schemes support Scheduled Tribe students across school, college, research and overseas study."
         crumb="Schemes"
       />
       <div className="shell py-10 md:py-14">
@@ -111,7 +111,7 @@ function Schemes() {
         ) : list.length === 0 ? (
           <EmptyState
             title="No schemes match your search"
-            desc="Try a different keyword, or clear the filters to see all six schemes."
+            desc="Try a different keyword, or clear the filters to see all schemes."
             action={
               <Button
                 variant="outline"

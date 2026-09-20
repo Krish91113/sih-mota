@@ -4,7 +4,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { PageHeader, StatusBadge } from "@/components/mota/bits";
 import {
   useFinanceExceptionsQuery,
-  useFinanceRecordsQuery,
   useResolveExceptionMutation,
   useReopenExceptionMutation,
 } from "@/hooks/api/useFinance";
@@ -20,36 +19,11 @@ export const Route = createFileRoute("/finance/exceptions")({
 
 function FinanceExceptions() {
   const exceptionsQuery = useFinanceExceptionsQuery();
-  const fallbackRecordsQuery = useFinanceRecordsQuery();
   const resolveMutation = useResolveExceptionMutation();
   const reopenMutation = useReopenExceptionMutation();
 
-  const isLoading = exceptionsQuery.isLoading && fallbackRecordsQuery.isLoading;
-  const isError = exceptionsQuery.isError && fallbackRecordsQuery.isError;
-
-  const rawList: Array<Record<string, unknown>> =
-    (exceptionsQuery.data as { data?: Array<Record<string, unknown>> })?.data ||
-    (Array.isArray(exceptionsQuery.data)
-      ? (exceptionsQuery.data as Array<Record<string, unknown>>)
-      : null) ||
-    (fallbackRecordsQuery.data as Array<Record<string, unknown>>) ||
-    [];
-
-  const exceptions = rawList.map((item: Record<string, unknown>) => {
-    const itemData = item.data as Record<string, unknown> | undefined;
-    return {
-      id: String(item.id),
-      status: String(item.status || "OPEN"),
-      reason: String(item.reason || (itemData?.reason ?? "Payment exception requires review")),
-      financeRecordId: String(item.finance_record_id || item.award_id || "—"),
-      expectedAmount: (item.expected_amount ?? item.amount ?? null) as number | null,
-      actualAmount: (item.actual_amount ?? null) as number | null,
-      difference: (item.difference ?? null) as number | null,
-      resolvedAt: (item.resolved_at ?? null) as string | null,
-    };
-  });
-
-  const openCount = exceptions.filter((e) => e.status === "OPEN" || e.status === "PENDING").length;
+  const exceptions = exceptionsQuery.data ?? [];
+  const openCount = exceptions.filter((e) => e.status !== "RESOLVED").length;
   const resolvedCount = exceptions.filter((e) => e.status === "RESOLVED").length;
 
   const handleResolve = async (id: string) => {
@@ -72,8 +46,9 @@ function FinanceExceptions() {
     }
   };
 
-  if (isLoading) return <p className="py-8 text-sm text-muted-foreground">Loading exceptions…</p>;
-  if (isError)
+  if (exceptionsQuery.isLoading)
+    return <p className="py-8 text-sm text-muted-foreground">Loading exceptions…</p>;
+  if (exceptionsQuery.isError)
     return (
       <p className="py-8 text-sm text-destructive">We could not load finance exceptions data.</p>
     );
@@ -129,26 +104,26 @@ function FinanceExceptions() {
                       )}
                       <span className="font-semibold">{e.id}</span>
                       <span className="text-xs text-muted-foreground">
-                        Ref: {e.financeRecordId}
+                        Ref: {e.finance_record_id ?? e.award_id ?? "—"}
                       </span>
                     </div>
                     <StatusBadge status={e.status} />
                   </div>
                   <p className="mt-2 text-sm font-medium">{e.reason}</p>
 
-                  {(e.expectedAmount !== null || e.actualAmount !== null) && (
+                  {(e.expected_amount != null || e.actual_amount != null) && (
                     <div className="mt-3 flex flex-wrap gap-4 text-xs">
-                      {e.expectedAmount !== null && (
+                      {e.expected_amount != null && (
                         <span>
-                          Expected: <strong>₹{Number(e.expectedAmount).toLocaleString()}</strong>
+                          Expected: <strong>₹{Number(e.expected_amount).toLocaleString()}</strong>
                         </span>
                       )}
-                      {e.actualAmount !== null && (
+                      {e.actual_amount != null && (
                         <span>
-                          Actual: <strong>₹{Number(e.actualAmount).toLocaleString()}</strong>
+                          Actual: <strong>₹{Number(e.actual_amount).toLocaleString()}</strong>
                         </span>
                       )}
-                      {e.difference !== null && (
+                      {e.difference != null && (
                         <span
                           className={
                             e.difference < 0
@@ -164,8 +139,8 @@ function FinanceExceptions() {
 
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
                     <div>
-                      {e.resolvedAt && (
-                        <span>Resolved at: {new Date(e.resolvedAt).toLocaleString()}</span>
+                      {e.resolved_at && (
+                        <span>Resolved at: {new Date(e.resolved_at).toLocaleString()}</span>
                       )}
                     </div>
                     <div className="flex gap-2">

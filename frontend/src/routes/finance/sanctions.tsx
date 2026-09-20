@@ -1,9 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader, StatusBadge, KpiCard } from "@/components/mota/bits";
 import { DataTable, type Column } from "@/components/mota/DataTable";
-import { useAwardsQuery } from "@/hooks/api/useFinance";
-
-type Row = Record<string, unknown>;
+import { useFinanceRecordsQuery } from "@/hooks/api/useFinance";
+import type { FinanceRecord } from "@/api/finance";
 import { Landmark, ListChecks } from "lucide-react";
 
 export const Route = createFileRoute("/finance/sanctions")({
@@ -13,7 +12,7 @@ export const Route = createFileRoute("/finance/sanctions")({
   component: FinanceSanctions,
 });
 
-const columns: Column<Row>[] = [
+const columns: Column<FinanceRecord>[] = [
   {
     key: "id",
     header: "Sanction ref",
@@ -21,28 +20,35 @@ const columns: Column<Row>[] = [
     cell: (r) => <span className="font-semibold">{r.id}</span>,
   },
   {
-    key: "scheme",
-    header: "Scheme",
-    sortValue: (r) => r.scheme,
-    cell: (r) => <span className="text-muted-foreground">{r.scheme}</span>,
-  },
-  {
-    key: "count",
-    header: "Beneficiaries",
-    sortValue: (r) => r.count,
-    cell: (r) => <span className="font-medium">{r.count.toLocaleString()}</span>,
+    key: "award_id",
+    header: "Award",
+    sortValue: (r) => r.award_id,
+    cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.award_id}</span>,
   },
   {
     key: "amount",
-    header: "Total",
-    sortValue: (r) => r.amount,
-    cell: (r) => <span className="font-medium">{r.amount}</span>,
+    header: "Amount",
+    sortValue: (r) => r.amount ?? 0,
+    cell: (r) => (
+      <span className="font-medium">
+        {typeof r.amount === "number" ? `₹${r.amount.toLocaleString()}` : "—"}
+      </span>
+    ),
   },
   {
-    key: "issued",
-    header: "Issued",
-    sortValue: (r) => r.issued,
-    cell: (r) => <span className="text-muted-foreground">{r.issued}</span>,
+    key: "provider",
+    header: "Provider",
+    sortValue: (r) => String(r.provider ?? ""),
+    cell: (r) => <span className="text-muted-foreground">{String(r.provider ?? "—")}</span>,
+    hideBelowMd: true,
+  },
+  {
+    key: "external_reference",
+    header: "Reference",
+    sortValue: (r) => String(r.external_reference ?? ""),
+    cell: (r) => (
+      <span className="text-muted-foreground">{String(r.external_reference ?? "—")}</span>
+    ),
     hideBelowMd: true,
   },
   {
@@ -54,28 +60,22 @@ const columns: Column<Row>[] = [
 ];
 
 function FinanceSanctions() {
-  const { data: financeSanctions = [], isLoading, isError } = useAwardsQuery();
+  const { data: records = [], isLoading, isError } = useFinanceRecordsQuery();
   if (isLoading) return <p className="py-8 text-sm text-muted-foreground">Loading sanctions…</p>;
   if (isError) return <p className="py-8 text-sm text-destructive">We could not load sanctions.</p>;
 
-  const totalSanctions = (financeSanctions as Row[]).length;
-  const totalAmount = (financeSanctions as Row[]).reduce((sum, s) => {
-    const val =
-      typeof s.amount === "number"
-        ? s.amount
-        : parseFloat(String(s.amount).replace(/[^0-9.-]+/g, "")) || 0;
-    return sum + val;
-  }, 0);
+  const sanctions = records.filter((r) => r.record_type === "SANCTION");
+  const totalAmount = sanctions.reduce((sum, r) => sum + (r.amount ?? 0), 0);
 
   return (
     <div>
       <PageHeader
         title="Sanctions"
-        desc="Approved sanction orders with their current disbursement stage."
+        desc="Sanction records raised against awards, with their current finance status."
       />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2">
-        <KpiCard label="Total sanctions" value={String(totalSanctions)} icon={Landmark} />
+        <KpiCard label="Total sanctions" value={String(sanctions.length)} icon={Landmark} />
         <KpiCard
           label="Total value"
           value={totalAmount > 0 ? `₹${totalAmount.toLocaleString()}` : "—"}
@@ -84,11 +84,13 @@ function FinanceSanctions() {
       </div>
 
       <DataTable
-        data={financeSanctions}
+        data={sanctions}
         columns={columns}
         getRowKey={(r) => r.id}
-        searchPlaceholder="Search sanction ref or scheme"
-        searchKeys={(r) => `${r.id} ${r.scheme} ${r.status}`}
+        searchPlaceholder="Search sanction ref, award or provider"
+        searchKeys={(r) => `${r.id} ${r.award_id} ${r.provider ?? ""} ${r.status}`}
+        emptyTitle="No sanctions recorded"
+        emptyDesc="Sanction records appear here once a finance officer raises them against an award."
       />
     </div>
   );

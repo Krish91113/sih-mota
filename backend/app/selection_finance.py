@@ -5,16 +5,16 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import audit
 from app.core.database import get_db
 from app.core.errors import Conflict, Forbidden, Immutable, NotFound
 from app.core.permissions import current_user, require_roles
-from app.domain.models import Application, SchemeVersion, User
+from app.domain.models import Applicant, Application, Scheme, SchemeVersion, User
 from app.domain.relational_models import (
-    Approval, Award, FinanceRecord, SchemeSelectionCriterion, SelectionCandidate,
+    Approval, ApplicationAssignment, Award, FinanceRecord, SchemeSelectionCriterion, SelectionCandidate,
     SelectionReview, SelectionRound, SelectionScore,
 )
 from app.domain.selection_finance_models import CommitteeComment, CommitteeDecision
@@ -26,6 +26,19 @@ router = APIRouter(tags=["Selection and Finance"])
 
 def public(obj):
     return {column.key: getattr(obj, column.key) for column in obj.__table__.columns}
+
+
+def _to_number(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
 
 
 def get_or_404(db, model, ident):
@@ -61,8 +74,30 @@ def candidate_round(db, candidate_id):
     return candidate, get_or_404(db, SelectionRound, candidate.round_id)
 
 
+def _committee_manage_all(user) -> bool:
+    return user.role in {"SCHEME_MANAGER", "SUPER_ADMIN"}
+
+
+def _committee_assigned(db, application_id, user_id) -> bool:
+    return bool(db.scalar(select(ApplicationAssignment.id).where(
+        ApplicationAssignment.application_id == application_id,
+        ApplicationAssignment.assignee_id == user_id,
+        ApplicationAssignment.assignment_type == "SELECTION_COMMITTEE",
+        or_(ApplicationAssignment.status.is_(None), ApplicationAssignment.status == "ACTIVE"),
+    )))
+
+
+def require_candidate_scope(db, candidate, user):
+    if _committee_manage_all(user):
+        return
+    application = db.get(Application, candidate.application_id)
+    if application is None or not _committee_assigned(db, application.id, user.id):
+        raise Forbidden("Candidate is outside the committee member's assignment scope")
+
+
 def committee_candidate(db, candidate_id, user):
     candidate, round_ = candidate_round(db, candidate_id)
+    require_candidate_scope(db, candidate, user)
     return candidate, round_
 
 
@@ -145,8 +180,7 @@ class ScoreIn(BaseModel):
     criterion_code: str
     raw_value: Any = None
     normalized_value: float | None = None
-    weight: float = 1
-    weighted_score: float | None = None
+    comment: str | None = None
 
 
 class ReviewIn(BaseModel):
@@ -203,9 +237,23 @@ COMMITTEE_ROLES = ("SELECTION_COMMITTEE_MEMBER", "SCHEME_MANAGER")
 
 @router.get("/committee/candidates")
 def list_committee_candidates(db: Session = Depends(get_db), user=Depends(require_roles(*COMMITTEE_ROLES))):
-    candidates = db.scalars(select(SelectionCandidate).join(SelectionRound).where(
-        SelectionRound.finalized_at.is_(None)
-    ).order_by(SelectionCandidate.rank.is_(None), SelectionCandidate.rank, SelectionCandidate.id)).all()
+    query = (
+        select(SelectionCandidate)
+        .join(SelectionRound)
+        .where(SelectionRound.finalized_at.is_(None))
+    )
+    if not _committee_manage_all(user):
+        query = query.where(
+            select(ApplicationAssignment.id)
+            .where(
+                ApplicationAssignment.application_id == SelectionCandidate.application_id,
+                ApplicationAssignment.assignee_id == user.id,
+                ApplicationAssignment.assignment_type == "SELECTION_COMMITTEE",
+                or_(ApplicationAssignment.status.is_(None), ApplicationAssignment.status == "ACTIVE"),
+            )
+            .exists()
+        )
+    candidates = db.scalars(query.order_by(SelectionCandidate.rank.is_(None), SelectionCandidate.rank, SelectionCandidate.id)).all()
     return {"success": True, "data": [candidate_data(db, candidate, user) for candidate in candidates]}
 
 
@@ -258,6 +306,53 @@ def declare_conflict(candidate_id: str, db: Session = Depends(get_db), user=Depe
 @router.post("/committee/candidates/{candidate_id}/conflict", status_code=201)
 def declare_committee_conflict(candidate_id: str, db: Session = Depends(get_db), user=Depends(require_roles(*COMMITTEE_ROLES)), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
     return declare_conflict(candidate_id, db, user, idempotency_key)
+
+
+class CommitteeAssignmentIn(BaseModel):
+    member_id: str
+    assignment_type: str = "SELECTION_COMMITTEE"
+
+
+@router.post("/committee/candidates/{candidate_id}/assignments", status_code=201)
+def assign_committee_candidate(candidate_id: str, body: CommitteeAssignmentIn, db: Session = Depends(get_db), user=Depends(require_roles("SCHEME_MANAGER", "SUPER_ADMIN")), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    candidate = get_or_404(db, SelectionCandidate, candidate_id)
+    target = get_or_404(db, User, body.member_id)
+    if target.role not in {"SELECTION_COMMITTEE_MEMBER", "SUPER_ADMIN"}:
+        raise Conflict("Assignment target must be a selection committee member")
+    record = mutation(db, idempotency_key, user.id, f"committee-candidates:{candidate_id}:assignments", body.model_dump())
+    if record is not None and record.response is not None:
+        return record.response
+    existing = db.scalar(select(ApplicationAssignment).where(
+        ApplicationAssignment.application_id == candidate.application_id,
+        ApplicationAssignment.assignee_id == target.id,
+        ApplicationAssignment.assignment_type == body.assignment_type,
+        or_(ApplicationAssignment.status.is_(None), ApplicationAssignment.status == "ACTIVE"),
+    ))
+    if existing:
+        result = {"success": True, "data": public(existing)}
+        return finish(db, record, result)
+    row = ApplicationAssignment(application_id=candidate.application_id, assignee_id=target.id, assignment_type=body.assignment_type)
+    db.add(row); db.flush()
+    audit(db, "COMMITTEE_CANDIDATE_ASSIGNED", user.id, "SELECTION_CANDIDATE", candidate_id, {"member_id": target.id})
+    result = {"success": True, "data": public(row)}
+    return finish(db, record, result)
+
+
+@router.delete("/committee/candidates/{candidate_id}/assignments/{member_id}")
+def revoke_committee_assignment(candidate_id: str, member_id: str, db: Session = Depends(get_db), user=Depends(require_roles("SCHEME_MANAGER", "SUPER_ADMIN"))):
+    candidate = get_or_404(db, SelectionCandidate, candidate_id)
+    row = db.scalar(select(ApplicationAssignment).where(
+        ApplicationAssignment.application_id == candidate.application_id,
+        ApplicationAssignment.assignee_id == member_id,
+        ApplicationAssignment.assignment_type == "SELECTION_COMMITTEE",
+        or_(ApplicationAssignment.status.is_(None), ApplicationAssignment.status == "ACTIVE"),
+    ))
+    if not row:
+        raise NotFound("Active committee assignment not found")
+    row.status = "REVOKED"
+    audit(db, "COMMITTEE_CANDIDATE_UNASSIGNED", user.id, "SELECTION_CANDIDATE", candidate_id, {"member_id": member_id})
+    db.commit()
+    return {"success": True, "data": public(row)}
 
 
 @router.post("/selection-candidates/{candidate_id}/abstain", status_code=201)
@@ -326,7 +421,7 @@ def list_comments(candidate_id: str, db: Session = Depends(get_db), user=Depends
 
 
 @router.post("/selection-rounds", status_code=201)
-def create_round(body: RoundIn, db: Session = Depends(get_db), user=Depends(require_roles("SCHEME_MANAGER", "SELECTION_COMMITTEE_MEMBER")), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+def create_round(body: RoundIn, db: Session = Depends(get_db), user=Depends(require_roles("SCHEME_MANAGER", "SUPER_ADMIN")), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
     version = get_or_404(db, SchemeVersion, body.scheme_version_id)
     record = mutation(db, idempotency_key, user.id, "selection-rounds", body.model_dump())
     if record is not None and record.response is not None:
@@ -338,14 +433,26 @@ def create_round(body: RoundIn, db: Session = Depends(get_db), user=Depends(requ
 
 
 @router.get("/selection-rounds/{round_id}")
-def get_round(round_id: str, db: Session = Depends(get_db), user=Depends(current_user)):
+def get_round(round_id: str, db: Session = Depends(get_db), user=Depends(require_roles("SELECTION_COMMITTEE_MEMBER", "SCHEME_MANAGER", "SUPER_ADMIN", "APPROVING_AUTHORITY", "FINANCE_OFFICER", "AUDITOR", "MONITORING_ANALYST"))):
     row = get_or_404(db, SelectionRound, round_id)
-    candidates = db.scalars(select(SelectionCandidate).where(SelectionCandidate.round_id == round_id)).all()
+    query = select(SelectionCandidate).where(SelectionCandidate.round_id == round_id)
+    if user.role == "SELECTION_COMMITTEE_MEMBER":
+        query = query.where(
+            select(ApplicationAssignment.id)
+            .where(
+                ApplicationAssignment.application_id == SelectionCandidate.application_id,
+                ApplicationAssignment.assignee_id == user.id,
+                ApplicationAssignment.assignment_type == "SELECTION_COMMITTEE",
+                or_(ApplicationAssignment.status.is_(None), ApplicationAssignment.status == "ACTIVE"),
+            )
+            .exists()
+        )
+    candidates = db.scalars(query).all()
     return {"success": True, "data": {**public(row), "candidates": [public(x) for x in candidates]}}
 
 
 @router.post("/selection-rounds/{round_id}/candidates", status_code=201)
-def add_candidate(round_id: str, body: CandidateIn, db: Session = Depends(get_db), user=Depends(require_roles("SELECTION_COMMITTEE_MEMBER", "SCHEME_MANAGER")), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+def add_candidate(round_id: str, body: CandidateIn, db: Session = Depends(get_db), user=Depends(require_roles("SCHEME_MANAGER", "SUPER_ADMIN")), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
     round_ = get_or_404(db, SelectionRound, round_id); locked(round_)
     get_or_404(db, Application, body.application_id)
     record = mutation(db, idempotency_key, user.id, f"selection-rounds:{round_id}:candidates", body.model_dump())
@@ -360,25 +467,43 @@ def add_candidate(round_id: str, body: CandidateIn, db: Session = Depends(get_db
 
 @router.post("/selection-candidates/{candidate_id}/scores", status_code=201)
 def add_score(candidate_id: str, body: ScoreIn, db: Session = Depends(get_db), user=Depends(require_roles("SELECTION_COMMITTEE_MEMBER", "SCHEME_MANAGER")), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
-    candidate, round_ = candidate_round(db, candidate_id); locked(round_); require_unconflicted(db, candidate_id, user.id)
+    candidate, round_ = committee_candidate(db, candidate_id, user); locked(round_); require_unconflicted(db, candidate_id, user.id)
     record = mutation(db, idempotency_key, user.id, f"selection-candidates:{candidate_id}:scores", body.model_dump())
     if record is not None and record.response is not None: return record.response
     existing = db.scalar(select(SelectionScore).where(SelectionScore.candidate_id == candidate_id, SelectionScore.criterion_code == body.criterion_code))
     if existing: raise Conflict("Score for this criterion already exists")
-    normalized = body.normalized_value if body.normalized_value is not None else float(body.raw_value) if isinstance(body.raw_value, (int, float)) else None
-    weighted = body.weighted_score if body.weighted_score is not None else (normalized * body.weight if normalized is not None else None)
-    row = SelectionScore(candidate_id=candidate_id, criterion_code=body.criterion_code, raw_value=body.raw_value, normalized_value=normalized, weight=body.weight, weighted_score=weighted)
+    round_version = db.get(SchemeVersion, round_.scheme_version_id)
+    criterion = None
+    if round_version:
+        criterion = db.scalar(select(SchemeSelectionCriterion).where(
+            SchemeSelectionCriterion.scheme_version_id == round_version.id,
+            SchemeSelectionCriterion.criterion_code == body.criterion_code,
+        ))
+    if not criterion:
+        raise Conflict("Criterion is not configured for this scheme version")
+    weight = float(criterion.weight or 1)
+    normalized = body.normalized_value if body.normalized_value is not None else _to_number(body.raw_value)
+    max_val = float(criterion.maximum) if criterion.maximum is not None else 10.0
+    min_val = float(criterion.minimum) if criterion.minimum is not None else 0.0
+    if normalized is not None:
+        if normalized < min_val or normalized > max_val:
+            raise Conflict(f"Score {normalized} is outside configured range [{min_val}, {max_val}] for criterion {body.criterion_code}")
+        normalized_scaled = (normalized / max_val) if max_val else 0.0
+        weighted = normalized_scaled * weight
+    else:
+        weighted = None
+    row = SelectionScore(candidate_id=candidate_id, criterion_code=body.criterion_code, raw_value=body.raw_value, normalized_value=normalized, weight=weight, weighted_score=weighted)
     db.add(row); db.flush()
     if weighted is not None:
         candidate.total_score = sum((x.weighted_score or Decimal("0")) for x in db.scalars(select(SelectionScore).where(SelectionScore.candidate_id == candidate_id)).all())
-    audit(db, "SELECTION_SCORE_RECORDED", user.id, "SELECTION_CANDIDATE", candidate_id, {"criterion_code": body.criterion_code})
+    audit(db, "SELECTION_SCORE_RECORDED", user.id, "SELECTION_CANDIDATE", candidate_id, {"criterion_code": body.criterion_code, "weight": weight})
     result = {"success": True, "data": public(row)}
     return finish(db, record, result)
 
 
 @router.post("/selection-candidates/{candidate_id}/reviews", status_code=201)
 def add_review(candidate_id: str, body: ReviewIn, db: Session = Depends(get_db), user=Depends(require_roles("SELECTION_COMMITTEE_MEMBER", "SCHEME_MANAGER")), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
-    candidate, round_ = candidate_round(db, candidate_id); locked(round_); require_unconflicted(db, candidate_id, user.id)
+    candidate, round_ = committee_candidate(db, candidate_id, user); locked(round_); require_unconflicted(db, candidate_id, user.id)
     if body.conflict:
         raise Conflict("Declare conflict through the conflict endpoint before abstaining")
     record = mutation(db, idempotency_key, user.id, f"selection-candidates:{candidate_id}:reviews", body.model_dump())
@@ -393,7 +518,7 @@ def add_review(candidate_id: str, body: ReviewIn, db: Session = Depends(get_db),
 
 @router.post("/selection-candidates/{candidate_id}/decisions", status_code=201)
 def add_decision(candidate_id: str, body: CommitteeDecisionIn, db: Session = Depends(get_db), user=Depends(require_roles("SELECTION_COMMITTEE_MEMBER", "SCHEME_MANAGER")), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
-    candidate, round_ = candidate_round(db, candidate_id); locked(round_)
+    candidate, round_ = committee_candidate(db, candidate_id, user); locked(round_)
     if body.conflict:
         raise Conflict("Conflict declarations must use the conflict endpoint")
     if body.decision not in {"APPROVE", "REJECT", "ABSTAIN"}: raise Conflict("Unsupported committee decision")
@@ -410,7 +535,7 @@ def add_decision(candidate_id: str, body: CommitteeDecisionIn, db: Session = Dep
 
 
 @router.post("/selection-rounds/{round_id}/finalize")
-def finalize_round(round_id: str, db: Session = Depends(get_db), user=Depends(require_roles("SCHEME_MANAGER", "SELECTION_COMMITTEE_MEMBER")), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+def finalize_round(round_id: str, db: Session = Depends(get_db), user=Depends(require_roles("SCHEME_MANAGER", "SUPER_ADMIN")), idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
     round_ = get_or_404(db, SelectionRound, round_id)
     if round_.finalized_at is not None:
         raise Conflict("Selection round is already finalized")
@@ -437,7 +562,9 @@ def finalize_round(round_id: str, db: Session = Depends(get_db), user=Depends(re
 
 
 @router.get("/applications/{application_id}/approval-packet")
-def get_packet(application_id: str, db: Session = Depends(get_db), user=Depends(current_user)):
+def get_packet(application_id: str, db: Session = Depends(get_db), user=Depends(require_roles("APPROVING_AUTHORITY", "SUPER_ADMIN", "SCHEME_MANAGER", "SELECTION_COMMITTEE_MEMBER", "FINANCE_OFFICER", "AUDITOR", "MONITORING_ANALYST"))):
+    if user.role == "SELECTION_COMMITTEE_MEMBER" and not _committee_assigned(db, application_id, user.id):
+        raise Forbidden("Application is outside the committee member's assignment scope")
     return {"success": True, "data": packet(db, application_id)}
 
 
@@ -457,6 +584,8 @@ def decide_approval(application_id: str, body: ApprovalIn, db: Session = Depends
             raise Forbidden("No active approval delegation")
     if db.scalar(select(Approval).where(Approval.application_id == application_id, Approval.decision == "APPROVED")):
         raise Conflict("Application is already approved")
+    if body.decision == "HOLD" and db.scalar(select(Approval).where(Approval.application_id == application_id, Approval.decision == "HOLD")):
+        raise Conflict("Application is already on hold")
     row = Approval(application_id=application_id, approver_id=user.id, decision=body.decision, reason_code=body.reason_code, note=body.note, packet_snapshot=details)
     db.add(row); db.flush(); audit(db, "APPROVAL_DECIDED", user.id, "APPLICATION", application_id, {"decision": body.decision})
     result = {"success": True, "data": public(row)}
@@ -472,7 +601,10 @@ def create_award(application_id: str, body: AwardIn, db: Session = Depends(get_d
     if not db.scalar(select(Approval).where(Approval.application_id == application_id, Approval.decision == "APPROVED")):
         raise Conflict("An approved decision is required before awarding")
     row = Award(application_id=application_id, scheme_version_id=application.scheme_version_id, amount=body.amount, awarded_by=user.id, award_date=body.award_date or datetime.now(timezone.utc), status="ACTIVE")
-    db.add(row); application.status = "AWARDED"; db.flush(); audit(db, "AWARD_CREATED", user.id, "AWARD", row.id, {"application_id": application_id, "amount": body.amount})
+    db.add(row); db.flush()
+    from app.core.status import move_application_status
+    move_application_status(db, application, "AWARDED", user.id, "Award created", "AWARD_CREATED")
+    audit(db, "AWARD_CREATED", user.id, "AWARD", row.id, {"application_id": application_id, "amount": body.amount})
     result = {"success": True, "data": public(row)}
     return finish(db, record, result)
 
@@ -491,11 +623,44 @@ def add_finance_record(award_id: str, body: FinanceIn, db: Session = Depends(get
 
 
 @router.get("/approvals/queue")
-def approval_queue(db: Session = Depends(get_db), user=Depends(require_roles("APPROVING_AUTHORITY"))):
-    rows=db.scalars(select(Approval).where(Approval.decision=="PENDING")).all()
-    return {"success":True,"data":[public(x) for x in rows]}
+def approval_queue(db: Session = Depends(get_db), user=Depends(require_roles("APPROVING_AUTHORITY", "SUPER_ADMIN"))):
+    now = datetime.now(timezone.utc)
+    rows = []
+    applications = db.scalars(select(Application).where(Application.status == "ELIGIBILITY_CONFIRMED")).all()
+    for application in applications:
+        if db.scalar(select(Approval).where(Approval.application_id == application.id, Approval.decision == "APPROVED")):
+            continue
+        applicant = db.get(Applicant, application.applicant_id)
+        applicant_user = db.get(User, applicant.user_id) if applicant else None
+        scheme = db.get(Scheme, application.scheme_id)
+        candidate = db.scalar(select(SelectionCandidate).where(SelectionCandidate.application_id == application.id))
+        created = application.created_at
+        if created and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        days = (now - created).days if created else 0
+        rows.append({
+            "id": application.id,
+            "application_number": application.application_number,
+            "applicant": applicant_user.full_name if applicant_user else None,
+            "applicant_id": application.applicant_id,
+            "scheme": scheme.name if scheme else None,
+            "scheme_code": scheme.code if scheme else None,
+            "score": float(candidate.total_score) if candidate and candidate.total_score is not None else None,
+            "committee": "Recommended" if candidate else None,
+            "scrutiny": "Completed",
+            "institution": "Verified",
+            "stage": application.status,
+            "status": application.status,
+            "priority": "High" if days >= 14 else "Medium" if days >= 7 else "Low",
+            "sla_days": days,
+            "created_at": application.created_at,
+        })
+    return {"success": True, "data": rows}
 @router.get("/applications/{application_id}/decision-packet")
-def decision_packet(application_id:str,db:Session=Depends(get_db),user=Depends(current_user)): return {"success":True,"data":packet(db,application_id)}
+def decision_packet(application_id:str,db:Session=Depends(get_db),user=Depends(require_roles("APPROVING_AUTHORITY", "SUPER_ADMIN", "SCHEME_MANAGER", "SELECTION_COMMITTEE_MEMBER", "FINANCE_OFFICER", "AUDITOR", "MONITORING_ANALYST"))):
+    if user.role == "SELECTION_COMMITTEE_MEMBER" and not _committee_assigned(db, application_id, user.id):
+        raise Forbidden("Application is outside the committee member's assignment scope")
+    return {"success":True,"data":packet(db,application_id)}
 @router.post("/applications/{application_id}/approve")
 def approve_application(application_id:str,body:ApprovalIn|None=None,db:Session=Depends(get_db),user=Depends(require_roles("APPROVING_AUTHORITY")),idempotency_key:str|None=Header(default=None,alias="Idempotency-Key")):
     return decide_approval(application_id,body or ApprovalIn(decision="APPROVED"),db,user,idempotency_key)
@@ -508,9 +673,26 @@ def return_application(application_id:str,body:ApprovalIn,db:Session=Depends(get
     if body.decision!="RETURNED" or not body.note: raise Conflict("Return requires note")
     return decide_approval(application_id,body,db,user,idempotency_key)
 @router.get("/awards")
-def awards(db:Session=Depends(get_db),user=Depends(current_user)): return {"success":True,"data":[public(x) for x in db.scalars(select(Award)).all()]}
+def awards(db:Session=Depends(get_db),user=Depends(current_user)):
+    from app.core.access import STAFF_READ_ROLES
+    q=select(Award)
+    if user.role in {"APPLICANT","INSTITUTION_NODAL_OFFICER"}:
+        if user.role=="APPLICANT":
+            applicant=db.scalar(select(Applicant).where(Applicant.user_id==user.id))
+            app_ids=db.scalars(select(Application.id).where(Application.applicant_id==applicant.id)).all() if applicant else []
+            q=q.where(Award.application_id.in_(app_ids))
+        else:
+            inst_id=institution_id_for(db,user)
+            app_ids=db.scalars(select(Application.id).where(Application.answers["institution"].as_string()==str(inst_id))).all()
+            q=q.where(Award.application_id.in_(app_ids))
+    return {"success":True,"data":[public(x) for x in db.scalars(q).all()]}
 @router.get("/awards/{award_id}")
-def award(award_id:str,db:Session=Depends(get_db),user=Depends(current_user)): return {"success":True,"data":public(get_or_404(db,Award,award_id))}
+def award(award_id:str,db:Session=Depends(get_db),user=Depends(current_user)):
+    from app.core.access import can_read_application
+    row=get_or_404(db,Award,award_id)
+    app=db.get(Application,row.application_id)
+    if app is not None and not can_read_application(db,app,user): raise Forbidden("Award is outside the user's scope")
+    return {"success":True,"data":public(row)}
 @router.post("/applications/{application_id}/award")
 def award_application(application_id:str,body:AwardIn,db:Session=Depends(get_db),user=Depends(require_roles("APPROVING_AUTHORITY")),idempotency_key:str|None=Header(default=None,alias="Idempotency-Key")):
     return create_award(application_id,body,db,user,idempotency_key)
@@ -529,6 +711,9 @@ def disbursement(body:FinanceIn,db:Session=Depends(get_db),user=Depends(require_
 
 @router.get("/awards/{award_id}/finance-records")
 def list_finance_records(award_id: str, db: Session = Depends(get_db), user=Depends(current_user)):
-    get_or_404(db, Award, award_id)
+    from app.core.access import can_read_application
+    row = get_or_404(db, Award, award_id)
+    app = db.get(Application, row.application_id)
+    if app is not None and not can_read_application(db, app, user): raise Forbidden("Finance records are outside the user's scope")
     rows = db.scalars(select(FinanceRecord).where(FinanceRecord.award_id == award_id)).all()
     return {"success": True, "data": [public(x) for x in rows]}

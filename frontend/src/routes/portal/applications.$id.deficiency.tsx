@@ -1,11 +1,12 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
 import { PageHeader, StatusBadge } from "@/components/mota/bits";
 import { UploadZone } from "@/components/mota/UploadZone";
 import { useApplicationQuery } from "@/hooks/api/useApplications";
-import { useQuery } from "@tanstack/react-query";
-import { listDeficiencies } from "@/api/deficiencies";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { listDeficiencies, respondToDeficiency } from "@/api/deficiencies";
 import { useState } from "react";
 import { AlertTriangle, ArrowRight, CheckCircle2, Clock } from "lucide-react";
 import { toast } from "sonner";
@@ -21,15 +22,24 @@ function DeficiencyResponse() {
     queryKey: ["deficiencies", id],
     queryFn: () => listDeficiencies({ application_id: id }),
   });
-  const app = appQuery.data;
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [responded, setResponded] = useState(false);
-  const list = (deficienciesQuery.data ?? []).map((d) => ({
-    ...d,
-    issue: d.description,
-    action: d.required_action,
-    raisedBy: String(d.raised_by ?? "Scrutiny officer"),
-  }));
+  const [response, setResponse] = useState("");
+  const [uploadedDocId, setUploadedDocId] = useState<string | null>(null);
+  const respondMutation = useMutation({
+    mutationFn: ({ deficiencyId, data }: { deficiencyId: string; data: Record<string, unknown> }) =>
+      respondToDeficiency(deficiencyId, data as { response: string }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["deficiencies", id] });
+      setResponded(true);
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Could not submit response"),
+  });
+
+  const app = appQuery.data;
+  const list = deficienciesQuery.data ?? [];
+
   if (appQuery.isLoading || deficienciesQuery.isLoading)
     return <p className="py-12 text-sm text-muted-foreground">Loading deficiencies…</p>;
   if (appQuery.isError || deficienciesQuery.isError || !app)
@@ -45,8 +55,8 @@ function DeficiencyResponse() {
             </span>
             <h1 className="mt-5 text-2xl">Response submitted</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              Your replacement documents are now with the scrutiny officer. Track the application to
-              see when the deficiency is closed.
+              Your response is now with the scrutiny officer. Track the application to see when the
+              deficiency is closed.
             </p>
             <Button
               className="mt-6"
@@ -64,7 +74,7 @@ function DeficiencyResponse() {
     <div>
       <PageHeader
         title="Action required — deficiencies"
-        desc={`Respond to the issues raised on ${app.id} before the deadlines below.`}
+        desc={`Respond to the issues raised on ${app.application_number ?? app.id} before the deadlines below.`}
         action={<StatusBadge status="Action Required" />}
       />
 
@@ -83,29 +93,30 @@ function DeficiencyResponse() {
                     {list.length}
                   </span>
                   <span className="text-xs text-muted-foreground">
-                    {d.id} · {d.issue}
+                    {d.id} · {d.type}
                   </span>
                 </div>
-                <h2 className="mt-3 text-lg font-semibold">{d.issue}</h2>
+                <h2 className="mt-3 text-lg font-semibold">{d.description}</h2>
                 <dl className="mt-4 grid gap-4 sm:grid-cols-3">
                   <div>
                     <dt className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                       Required action
                     </dt>
-                    <dd className="mt-1 text-sm font-medium">{d.action}</dd>
+                    <dd className="mt-1 text-sm font-medium">{d.required_action}</dd>
                   </div>
                   <div>
                     <dt className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                      Raised by
+                      Severity
                     </dt>
-                    <dd className="mt-1 text-sm font-medium">{d.raisedBy}</dd>
+                    <dd className="mt-1 text-sm font-medium">{d.severity}</dd>
                   </div>
                   <div>
                     <dt className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                       Deadline
                     </dt>
                     <dd className="mt-1 flex items-center gap-1.5 text-sm font-medium text-destructive">
-                      <Clock className="size-3.5" aria-hidden /> {d.deadline}
+                      <Clock className="size-3.5" aria-hidden />{" "}
+                      {d.deadline ? new Date(d.deadline).toLocaleDateString() : "—"}
                     </dd>
                   </div>
                 </dl>
@@ -116,14 +127,44 @@ function DeficiencyResponse() {
                     audit.
                   </p>
                   <div className="mt-3">
-                    <UploadZone onUploaded={() => undefined} />
+                    <UploadZone
+                      applicationId={app.id}
+                      documentType={d.type || "MARKSHEET"}
+                      onUploaded={(doc) => {
+                        const docId =
+                          doc && typeof doc === "object" && "id" in doc
+                            ? String((doc as { id: unknown }).id)
+                            : null;
+                        setUploadedDocId(docId);
+                      }}
+                    />
                   </div>
                 </div>
-                <div className="mt-5 flex flex-wrap gap-2 border-t pt-4">
-                  <Button variant="outline" onClick={() => toast.info("Replacement file selected")}>
-                    Attach to response
-                  </Button>
-                  <Button onClick={() => setResponded(true)}>Submit response</Button>
+                <div className="mt-5 border-t pt-4">
+                  <Textarea
+                    className="min-h-24"
+                    placeholder="Describe the correction made and any clarification for the officer…"
+                    value={response}
+                    onChange={(e) => setResponse(e.target.value)}
+                  />
+                  <div className="mt-3 flex justify-end">
+                    <Button
+                      disabled={!response.trim() || respondMutation.isPending}
+                      onClick={() =>
+                        respondMutation.mutate({
+                          deficiencyId: d.id,
+                          data: {
+                            response: response.trim(),
+                            supporting_documents: uploadedDocId
+                              ? { document_ids: [uploadedDocId] }
+                              : {},
+                          },
+                        })
+                      }
+                    >
+                      {respondMutation.isPending ? "Submitting…" : "Submit response"}
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>

@@ -15,7 +15,7 @@ function AuditEventDetail() {
   const navigate = useNavigate();
   const query = useAuditEventsQuery();
   const event = query.data?.find((x) => x.id === id);
-  const previous = query.data?.find((x) => x.id === event?.details?.correction_of);
+  const previous = query.data?.find((x) => x.id === event?.details?.["correction_of"]);
   if (query.isLoading) return <p className="text-sm text-muted-foreground">Loading audit event…</p>;
   if (query.isError)
     return (
@@ -45,7 +45,7 @@ function AuditEventDetail() {
                 <Field label="Resource" value={event.resource_type} />
                 <Field label="Resource ID" value={event.resource_id} />
                 <Field label="Actor" value={event.actor_id} />
-                <Field label="Request ID" value={String(event.details?.request_id ?? "—")} />
+                <Field label="Request ID" value={String(event.details?.["request_id"] ?? "—")} />
               </dl>
             </CardContent>
           </Card>
@@ -77,7 +77,7 @@ function AuditEventDetail() {
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
                 Recorded in system ledger at{" "}
-                {e.at ? new Date(e.at).toLocaleString() : "event creation"}.
+                {event.timestamp ? new Date(event.timestamp).toLocaleString() : "event creation"}.
               </p>
             </CardContent>
           </Card>

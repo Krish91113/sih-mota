@@ -89,7 +89,13 @@ export function useDecisionPacketQuery(id: string) {
 export function useCreateApplicationMutation() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: appApi.createApplication,
+    mutationFn: ({
+      data,
+      idempotencyKey,
+    }: {
+      data: Parameters<typeof appApi.createApplication>[0];
+      idempotencyKey: string;
+    }) => appApi.createApplication(data, idempotencyKey),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.applications.all }),
   });
 }

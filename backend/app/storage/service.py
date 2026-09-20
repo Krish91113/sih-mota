@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from hashlib import sha256
-import base64, hashlib, hmac, json, logging, os, uuid
+import base64, hashlib, hmac, json, logging, os, time, uuid
 from pathlib import Path, PurePosixPath
 import httpx
 from app.core.config import get_settings
@@ -88,6 +88,88 @@ class LocalStorageProvider(StorageService):
             return str(full_dest)
         return None
 
+class CloudinaryStorageProvider(StorageService):
+    def __init__(self, cloud_name: str, api_key: str, api_secret: str, folder: str = "mota", timeout: float = 20.0):
+        self.cloud_name = cloud_name.strip()
+        self.api_key = api_key.strip()
+        self.api_secret = api_secret.strip()
+        self.folder = folder.strip('/')
+        self.timeout = timeout
+        self.local_fallback = LocalStorageProvider()
+
+    def upload(self, content: bytes, filename: str, content_type: str, folder: str | None = None) -> StoredObject:
+        safe = PurePosixPath(filename or "upload").name
+        target_folder = (folder or self.folder).strip('/')
+        timestamp = str(int(time.time()))
+
+        to_sign = f"folder={target_folder}&timestamp={timestamp}{self.api_secret}"
+        signature = hashlib.sha1(to_sign.encode("utf-8")).hexdigest()
+
+        files = {"file": (safe, content, content_type or "application/octet-stream")}
+        data = {
+            "api_key": self.api_key,
+            "timestamp": timestamp,
+            "folder": target_folder,
+            "signature": signature,
+        }
+
+        url = f"https://api.cloudinary.com/v1_1/{self.cloud_name}/auto/upload"
+
+        try:
+            response = httpx.post(url, data=data, files=files, timeout=self.timeout)
+            response.raise_for_status()
+            res_json = response.json()
+            public_id = res_json.get("public_id")
+            secure_url = res_json.get("secure_url") or res_json.get("url")
+            digest = sha256(content).hexdigest()
+
+            return StoredObject(
+                key=public_id or f"{target_folder}/{uuid.uuid4()}-{safe}",
+                size=len(content),
+                sha256=digest,
+                provider="cloudinary",
+                provider_id=res_json.get("asset_id") or public_id,
+                url=secure_url,
+                metadata={"mime": content_type, "filename": safe, "cloudinary": res_json},
+            )
+        except Exception as exc:
+            logger.warning("Cloudinary upload failed: %s. Falling back to local storage.", exc)
+            fallback_obj = self.local_fallback.upload(content, filename, content_type, folder)
+            fallback_obj.metadata["fallback_from"] = "cloudinary"
+            fallback_obj.metadata["cloudinary_error"] = str(exc)
+            return fallback_obj
+
+    def delete(self, key: str, provider_id: str | None = None) -> None:
+        target_id = provider_id or key
+        timestamp = str(int(time.time()))
+        to_sign = f"public_id={target_id}&timestamp={timestamp}{self.api_secret}"
+        signature = hashlib.sha1(to_sign.encode("utf-8")).hexdigest()
+
+        data = {
+            "public_id": target_id,
+            "api_key": self.api_key,
+            "timestamp": timestamp,
+            "signature": signature,
+        }
+        url = f"https://api.cloudinary.com/v1_1/{self.cloud_name}/image/destroy"
+        try:
+            httpx.post(url, data=data, timeout=self.timeout)
+        except Exception as exc:
+            logger.warning("Cloudinary delete failed for %s: %s", key, exc)
+
+    def get_signed_url(self, key: str, expires_in: int = 300) -> str:
+        if key.startswith("http://") or key.startswith("https://"):
+            return key
+        if "/" in key and not key.startswith("storage/"):
+            return f"https://res.cloudinary.com/{self.cloud_name}/image/upload/{key}"
+        return self.local_fallback.get_signed_url(key, expires_in)
+
+    def get_metadata(self, key: str, provider_id: str | None = None) -> dict:
+        return {"key": key, "provider": "cloudinary", "provider_id": provider_id}
+
+    def get_file_path(self, key: str) -> str | None:
+        return self.local_fallback.get_file_path(key)
+
 class ImageKitStorageProvider(StorageService):
     upload_endpoint = "https://upload.imagekit.io/api/v1/files/upload"
 
@@ -133,12 +215,19 @@ class ImageKitStorageProvider(StorageService):
                 {"mime": content_type, "filename": safe, "imagekit": data},
             )
         except Exception as exc:
-            logger.warning("ImageKit upload error (%s), falling back to local secure storage", exc)
-            return self.local_fallback.upload(content, filename, content_type, folder)
+            logger.warning("ImageKit upload failed: %s. Falling back to local storage.", exc)
+            fallback_obj = self.local_fallback.upload(content, filename, content_type, folder)
+            fallback_obj.metadata["fallback_from"] = "imagekit"
+            fallback_obj.metadata["imagekit_error"] = str(exc)
+            return fallback_obj
 
     def delete(self, key: str, provider_id: str | None = None) -> None:
         if not provider_id:
-            return self.local_fallback.delete(key, provider_id)
+            raise StorageProviderError(
+                "ImageKit delete requires a provider file ID",
+                provider="imagekit",
+                details={"operation": "delete"},
+            )
         try:
             response = httpx.delete(
                 f"https://api.imagekit.io/v1/files/{provider_id}",
@@ -146,14 +235,14 @@ class ImageKitStorageProvider(StorageService):
                 timeout=self.timeout,
             )
             response.raise_for_status()
-        except Exception:
-            self.local_fallback.delete(key, provider_id)
+        except Exception as exc:
+            raise StorageProviderError(
+                f"ImageKit delete failed: {exc}",
+                provider="imagekit",
+                details={"operation": "delete"},
+            ) from exc
 
     def get_signed_url(self, key: str, expires_in: int = 300) -> str:
-        if not key.startswith("http"):
-            local_path = self.local_fallback.get_file_path(key)
-            if local_path:
-                return self.local_fallback.get_signed_url(key, expires_in)
         token = uuid.uuid4().hex
         path = "/" + key.lstrip('/')
         signature = hmac.new(self.private_key.encode(), (path + token).encode(), hashlib.sha1).hexdigest()
@@ -161,7 +250,11 @@ class ImageKitStorageProvider(StorageService):
 
     def get_metadata(self, key: str, provider_id: str | None = None) -> dict:
         if not provider_id:
-            return self.local_fallback.get_metadata(key, provider_id)
+            raise StorageProviderError(
+                "ImageKit metadata requires a provider file ID",
+                provider="imagekit",
+                details={"operation": "metadata"},
+            )
         try:
             response = httpx.get(
                 f"https://api.imagekit.io/v1/files/{provider_id}",
@@ -171,24 +264,57 @@ class ImageKitStorageProvider(StorageService):
             response.raise_for_status()
             data = response.json()
             return {"key": key, "provider": "imagekit", "provider_id": provider_id, "metadata": data}
-        except Exception:
-            return self.local_fallback.get_metadata(key, provider_id)
+        except Exception as exc:
+            raise StorageProviderError(
+                f"ImageKit metadata fetch failed: {exc}",
+                provider="imagekit",
+                details={"operation": "metadata"},
+            ) from exc
 
     def get_file_path(self, key: str) -> str | None:
-        return self.local_fallback.get_file_path(key)
+        return None
 
 class MockStorageProvider(LocalStorageProvider):
-    pass
+    def upload(self, content: bytes, filename: str, content_type: str, folder: str | None = None) -> StoredObject:
+        stored = super().upload(content, filename, content_type, folder)
+        stored.provider = "mock"
+        return stored
+
+    def get_signed_url(self, key: str, expires_in: int = 300) -> str:
+        return f"{self.endpoint}/documents/file/{key}?expires_in={int(expires_in)}"
 
 def get_storage_provider() -> StorageService:
     settings = get_settings()
-    if settings.storage_provider.lower() == "imagekit" and settings.imagekit_private_key:
+    provider_name = settings.storage_provider.lower()
+    if provider_name == "cloudinary":
+        if not settings.cloudinary_cloud_name or not settings.cloudinary_api_key or not settings.cloudinary_api_secret:
+            raise StorageProviderError(
+                "CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET are required when STORAGE_PROVIDER=cloudinary",
+                provider="cloudinary",
+                details={"operation": "configuration"},
+            )
+        return CloudinaryStorageProvider(
+            settings.cloudinary_cloud_name,
+            settings.cloudinary_api_key,
+            settings.cloudinary_api_secret,
+            settings.cloudinary_folder,
+        )
+    elif provider_name == "imagekit":
+        if not settings.imagekit_private_key or not settings.imagekit_public_key or not settings.imagekit_endpoint:
+            raise StorageProviderError(
+                "IMAGEKIT_PRIVATE_KEY, IMAGEKIT_PUBLIC_KEY, and IMAGEKIT_ENDPOINT are required when STORAGE_PROVIDER=imagekit",
+                provider="imagekit",
+                details={"operation": "configuration"},
+            )
         return ImageKitStorageProvider(
             settings.imagekit_private_key,
             settings.imagekit_public_key,
             settings.imagekit_endpoint,
             settings.imagekit_folder,
         )
+    elif provider_name == "mock":
+        return MockStorageProvider()
     return LocalStorageProvider()
 
 ImageKitStorage = ImageKitStorageProvider
+CloudinaryStorage = CloudinaryStorageProvider

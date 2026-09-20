@@ -103,6 +103,22 @@ export function cloneVersion(versionId: string) {
   return api.post<SchemeVersion>(`/scheme-versions/${versionId}/clone`);
 }
 
+// ── Scheme Documents ─────────────────────────────────────────────────────────
+
+export interface SchemeDocument {
+  id: string;
+  scheme_version_id: string;
+  document_code: string;
+  label: string;
+  required: boolean;
+  status: string;
+  [key: string]: unknown;
+}
+
+export function getSchemeVersionDocuments(versionId: string) {
+  return api.get<SchemeDocument[]>(`/scheme-versions/${versionId}/documents`);
+}
+
 // ── Form Definitions ─────────────────────────────────────────────────────────
 
 export function getFormDefinition(versionId: string) {

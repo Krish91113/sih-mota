@@ -149,7 +149,7 @@ export function DocumentViewer({
               </div>
             )}
             <p className="mt-4 text-center text-xs text-muted-foreground">
-              {file} · {size} · Securely streamed from ImageKit CDN.
+              {file} · {size} · Securely streamed from Cloudinary CDN.
             </p>
           </div>
 
