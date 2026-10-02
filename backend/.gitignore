@@ -1,0 +1,27 @@
+# Environments & Secrets
+.env
+.env.*
+!.env.example
+
+# Local Databases & Backups
+*.db
+*.sqlite3
+*.zip
+*.tar.gz
+project_backup.zip
+
+# Application Storage & Sensitive Uploads
+backend/storage/
+storage/
+**/storage/documents/
+
+# Forensic audit sidecars (record id + hashes only, written by scripts/)
+scripts/audit_hashes_*.json
+
+# Server Logs
+*.log
+backend/uvicorn*.log
+
+
+storage/*
+storage/
