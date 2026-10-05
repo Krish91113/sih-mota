@@ -243,11 +243,13 @@ function NewApplication() {
               defaults={{
                 fullName: profileQuery.data?.full_name || user?.full_name || "",
                 dob: profile?.personal?.["dob"] || "",
-                gender: profile?.personal?.["gender"]?.toLowerCase() || "",
-                tribe: profile?.st?.["tribe"]?.toLowerCase() || "",
+                gender: profile?.personal?.["gender"] || "",
+                tribe: profile?.st?.["tribe"] || "",
                 mobile: profile?.contact?.["mobile"] || "",
                 email: user?.email || "",
                 pursuingPhd: profile?.research?.["status"] === "PURSUING_PHD" ? "true" : "false",
+                netQualified: profile?.personal?.["ugcNetQualified"] || "",
+                ugcNetQualified: profile?.personal?.["ugcNetQualified"] || "",
               }}
               onSubmit={handleFormSubmit}
               submitLabel="Continue to review"

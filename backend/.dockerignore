@@ -1,0 +1,31 @@
+# Secrets: supplied at runtime by compose `env_file`, never baked into the image
+.env
+.env.*
+!.env.example
+
+# Virtualenvs
+.venv
+venv
+env
+
+# Local artefacts
+storage/
+__pycache__/
+*.py[cod]
+*.log
+*.db
+*.sqlite3
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Docs / editor
+README.md
+*.md
+.vscode/
+.idea/

@@ -68,6 +68,7 @@ function Profile() {
     marital: "",
     nationality: "Indian",
     aadhaar: "",
+    ugcNetQualified: "", // NEW: UGC-NET / CSIR-NET Qualified? (Yes / No)
   });
 
   const [contact, setContact] = useState({
@@ -180,6 +181,7 @@ function Profile() {
       personal.marital,
       personal.nationality,
       personal.aadhaar,
+      personal.ugcNetQualified, // NEW field included
       contact.mobile,
       contact.email,
       address.current,
@@ -455,6 +457,35 @@ function Profile() {
                     />
                   )}
                 </div>
+
+                {/* NEW FIELD: UGC-NET / CSIR-NET Qualified? */}
+                <div>
+                  <Label htmlFor="ugcNet" className="text-xs text-muted-foreground uppercase">
+                    UGC-NET / CSIR-NET Qualified?
+                  </Label>
+                  {isEditing ? (
+                    <Select
+                      value={personal.ugcNetQualified}
+                      onValueChange={(v) => setPersonal({ ...personal, ugcNetQualified: v })}
+                    >
+                      <SelectTrigger id="ugcNet" className="mt-1">
+                        <SelectValue placeholder="Select Yes / No" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Yes">Yes</SelectItem>
+                        <SelectItem value="No">No</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input
+                      id="ugcNet"
+                      value={personal.ugcNetQualified || "Not specified"}
+                      readOnly
+                      className="mt-1 bg-muted/40"
+                    />
+                  )}
+                </div>
+
                 <div>
                   <Label htmlFor="marital" className="text-xs text-muted-foreground uppercase">
                     Marital Status

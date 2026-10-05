@@ -18,21 +18,36 @@ services:
       retries: 10
       start_period: 10s
 
-  api:
-    build: .
-    container_name: mota-api
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mota-backend
     restart: unless-stopped
-    # All app settings come from the backend .env (JWT, CORS, Cloudinary, SMTP...)
     env_file:
-      - .env
+      - ./backend/.env
     environment:
-      # Container-internal override: on the compose network the DB is the `db` host.
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mota}:${POSTGRES_PASSWORD:-mota}@db:5432/${POSTGRES_DB:-mota}
+      PYTHONPATH: /app
+    command: sh -c "alembic upgrade head && python scripts/seed.py && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mota-frontend
+    restart: unless-stopped
+    env_file:
+      - ./frontend/.env
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:

@@ -15,7 +15,8 @@ import {
 } from "@/components/ui/select";
 import { AlertCircle, CheckCircle2, Loader2, Plus, Trash2 } from "lucide-react";
 
-export type FormOption = { value: string; label: string };
+export type FormOption = string | { value: string; label: string };
+
 
 export type FormFieldType =
   | "text"
@@ -381,45 +382,73 @@ export function FieldRenderer({
           className="mt-2"
         />
       ) : field.type === "dropdown" ? (
-        <Select value={str} onValueChange={(v) => onChange(v)}>
-          <SelectTrigger id={field.id} className="mt-2 w-full" aria-invalid={!!error}>
-            <SelectValue placeholder={field.placeholder ?? "Select an option"} />
-          </SelectTrigger>
-          <SelectContent>
-            {field.options?.map((o) => (
-              <SelectItem key={o.value} value={o.value}>
-                {o.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        (() => {
+          const optList = (field.options ?? []).map((o) => {
+            if (typeof o === "string") return { value: o, label: o };
+            const obj = o as { value?: string; label?: string };
+            return {
+              value: obj.value ?? obj.label ?? String(o),
+              label: obj.label ?? obj.value ?? String(o),
+            };
+          });
+          const matchedValue = optList.find((o) => o.value.toLowerCase() === str.toLowerCase())?.value ?? str;
+          return (
+            <Select value={matchedValue} onValueChange={(v) => onChange(v)}>
+              <SelectTrigger id={field.id} className="mt-2 w-full" aria-invalid={!!error}>
+                <SelectValue placeholder={field.placeholder ?? "Select an option"} />
+              </SelectTrigger>
+              <SelectContent>
+                {optList.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          );
+        })()
       ) : field.type === "multiselect" ? (
         <MultiSelect field={field} value={value} onChange={onChange} />
       ) : field.type === "radio" ? (
-        <fieldset className="mt-2">
-          <legend className="sr-only">{field.label}</legend>
-          <div className="flex flex-wrap gap-2">
-            {field.options?.map((o) => (
-              <label
-                key={o.value}
-                className={cn(
-                  "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors",
-                  str === o.value ? "border-primary bg-primary/5 text-primary" : "hover:bg-accent",
-                )}
-              >
-                <input
-                  type="radio"
-                  name={field.id}
-                  value={o.value}
-                  checked={str === o.value}
-                  onChange={() => onChange(o.value)}
-                  className="accent-[var(--primary)]"
-                />
-                {o.label}
-              </label>
-            ))}
-          </div>
-        </fieldset>
+        (() => {
+          const optList = (field.options ?? []).map((o) => {
+            if (typeof o === "string") return { value: o, label: o };
+            const obj = o as { value?: string; label?: string };
+            return {
+              value: obj.value ?? obj.label ?? String(o),
+              label: obj.label ?? obj.value ?? String(o),
+            };
+          });
+          return (
+            <fieldset className="mt-2">
+              <legend className="sr-only">{field.label}</legend>
+              <div className="flex flex-wrap gap-2">
+                {optList.map((o) => {
+                  const isChecked = str.toLowerCase() === o.value.toLowerCase();
+                  return (
+                    <label
+                      key={o.value}
+                      className={cn(
+                        "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors",
+                        isChecked ? "border-primary bg-primary/5 text-primary" : "hover:bg-accent",
+                      )}
+                    >
+                      <input
+                        type="radio"
+                        name={field.id}
+                        value={o.value}
+                        checked={isChecked}
+                        onChange={() => onChange(o.value)}
+                        className="accent-[var(--primary)]"
+                      />
+                      {o.label}
+                    </label>
+                  );
+                })}
+              </div>
+            </fieldset>
+          );
+        })()
       ) : field.type === "checkbox" ? (
         <label className="mt-3 flex cursor-pointer items-start gap-2 text-sm">
           <Checkbox
@@ -486,16 +515,26 @@ function MultiSelect({
   onChange: (v: FieldValue) => void;
 }) {
   const selected = ((value as MultiValue) ?? []).map(String);
+  const optList = (field.options ?? []).map((o) => {
+    if (typeof o === "string") return { value: o, label: o };
+    const obj = o as { value?: string; label?: string };
+    return {
+      value: obj.value ?? obj.label ?? String(o),
+      label: obj.label ?? obj.value ?? String(o),
+    };
+  });
   return (
     <div className="mt-2 space-y-1.5">
-      {field.options?.map((o) => {
-        const checked = selected.includes(o.value);
+      {optList.map((o) => {
+        const checked = selected.some((s) => s.toLowerCase() === o.value.toLowerCase());
         return (
           <label key={o.value} className="flex cursor-pointer items-center gap-2 text-sm">
             <Checkbox
               checked={checked}
               onCheckedChange={(c) => {
-                const next = c ? [...selected, o.value] : selected.filter((s) => s !== o.value);
+                const next = c
+                  ? [...selected, o.value]
+                  : selected.filter((s) => s.toLowerCase() !== o.value.toLowerCase());
                 onChange(next);
               }}
             />
